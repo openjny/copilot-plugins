@@ -1,0 +1,51 @@
+{
+  "name": "openjny",
+  "metadata": {
+    "description": "Public GitHub Copilot plugins from openjny",
+    "version": "1.0.0"
+  },
+  "owner": {
+    "name": "openjny",
+    "email": "openjny@gmail.com"
+  },
+  "plugins": [
+    {
+      "name": "council",
+      "description": "Aggregate responses from multiple LLM models to reach a conclusion on complex or multi-perspective problems.",
+      "version": "1.0.0",
+      "author": {
+        "name": "openjny",
+        "url": "https://github.com/openjny"
+      },
+      "homepage": "https://github.com/openjny/copilot-plugins/tree/main/plugins/council",
+      "repository": "https://github.com/openjny/copilot-plugins",
+      "keywords": [
+        "copilot",
+        "llm",
+        "multi-model",
+        "review"
+      ],
+      "license": "MIT",
+      "source": "./plugins/council"
+    },
+    {
+      "name": "grilling",
+      "description": "Interview the user relentlessly to stress-test a plan or design before implementation.",
+      "version": "1.0.0",
+      "author": {
+        "name": "openjny",
+        "url": "https://github.com/openjny"
+      },
+      "homepage": "https://github.com/openjny/copilot-plugins/tree/main/plugins/grilling",
+      "repository": "https://github.com/openjny/copilot-plugins",
+      "keywords": [
+        "copilot",
+        "interview",
+        "planning",
+        "design-review"
+      ],
+      "license": "MIT",
+      "source": "./plugins/grilling"
+    }
+  ]
+}

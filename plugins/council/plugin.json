@@ -1,0 +1,19 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+  "name": "council",
+  "version": "1.0.0",
+  "description": "Aggregate responses from multiple LLM models to reach a conclusion on complex or multi-perspective problems.",
+  "author": {
+    "name": "openjny",
+    "url": "https://github.com/openjny"
+  },
+  "homepage": "https://github.com/openjny/copilot-plugins/tree/main/plugins/council",
+  "repository": "https://github.com/openjny/copilot-plugins",
+  "license": "MIT",
+  "keywords": [
+    "copilot",
+    "llm",
+    "multi-model",
+    "review"
+  ]
+}
