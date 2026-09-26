@@ -2,7 +2,7 @@
   "name": "openjny",
   "metadata": {
     "description": "Public GitHub Copilot plugins from openjny",
-    "version": "1.0.0"
+    "version": "1.1.0"
   },
   "owner": {
     "name": "openjny",
@@ -46,6 +46,44 @@
       ],
       "license": "MIT",
       "source": "./plugins/grilling"
+    },
+    {
+      "name": "standard-ai-sdlc-repo",
+      "description": "Set up or review a standard repository for AI-assisted software development with the essential files, documentation, governance, and agent context.",
+      "version": "1.0.0",
+      "author": {
+        "name": "openjny",
+        "url": "https://github.com/openjny"
+      },
+      "homepage": "https://github.com/openjny/copilot-plugins/tree/main/plugins/standard-ai-sdlc-repo",
+      "repository": "https://github.com/openjny/copilot-plugins",
+      "keywords": [
+        "copilot",
+        "sdlc",
+        "repository",
+        "scaffolding"
+      ],
+      "license": "MIT",
+      "source": "./plugins/standard-ai-sdlc-repo"
+    },
+    {
+      "name": "zoom-out",
+      "description": "Step back from the immediate details to map the broader context, big picture, higher-level purpose, and relationships.",
+      "version": "1.0.0",
+      "author": {
+        "name": "openjny",
+        "url": "https://github.com/openjny"
+      },
+      "homepage": "https://github.com/openjny/copilot-plugins/tree/main/plugins/zoom-out",
+      "repository": "https://github.com/openjny/copilot-plugins",
+      "keywords": [
+        "copilot",
+        "big-picture",
+        "context",
+        "perspective"
+      ],
+      "license": "MIT",
+      "source": "./plugins/zoom-out"
     }
   ]
 }
