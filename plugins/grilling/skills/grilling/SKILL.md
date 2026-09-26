@@ -1,10 +1,12 @@
 ---
 name: grilling
-description: Interview the user relentlessly about a plan or design. Use when the user wants to stress-test a plan before building, or uses any 'grill' trigger phrases.
+description: "ユーザーの考え、アイデア、方針、主張などを質問で徹底的に掘り下げ、曖昧さや矛盾、未検討の論点を解消して共通理解に至るスキル。考えを詰めたいとき、壁打ちしたいとき、「grill」「詰めて」などと言われたときに使う。"
 ---
 
-Interview me relentlessly about every aspect of this plan until we reach a shared understanding via `askQuestions`. Walk down each branch of the design tree, resolving dependencies between decisions one-by-one. For each question, provide your recommended answer.
+対象となる考えについて、ユーザーと共通理解に至るまで徹底的に質問してください。質問には、利用できるユーザーへの質問用ツール（`ask_user`、`askQuestions` など）があればそれを使います。論点を木構造としてとらえ、論点同士の依存関係を踏まえながら 1 つずつ解消していきます。各質問には、推奨する回答とその理由を添えます。
 
-Ask the questions one at a time, waiting for feedback on each question before continuing. Asking multiple questions at once is bewildering.
+表面的な要望や意見で止まらず、「なぜそうしたいのか」を掘り下げて根本の目的を明らかにします。仮定や一般論ではなく、具体的な事例や事実を尋ねます。
 
-If a question can be answered by exploring the codebase, explore the codebase instead.
+質問は 1 回に 1 つだけにし、回答を得てから次に進みます。一度に複数の質問をすると混乱を招きます。
+
+手元の資料や調査で答えが分かる質問は、ユーザーに尋ねずに自分で調べます。
