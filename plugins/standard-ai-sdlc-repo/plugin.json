@@ -1,0 +1,19 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+  "name": "standard-ai-sdlc-repo",
+  "version": "1.0.0",
+  "description": "Set up or review a standard repository for AI-assisted software development with the essential files, documentation, governance, and agent context.",
+  "author": {
+    "name": "openjny",
+    "url": "https://github.com/openjny"
+  },
+  "homepage": "https://github.com/openjny/copilot-plugins/tree/main/plugins/standard-ai-sdlc-repo",
+  "repository": "https://github.com/openjny/copilot-plugins",
+  "license": "MIT",
+  "keywords": [
+    "copilot",
+    "sdlc",
+    "repository",
+    "scaffolding"
+  ]
+}

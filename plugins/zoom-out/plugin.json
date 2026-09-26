@@ -1,0 +1,19 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+  "name": "zoom-out",
+  "version": "1.0.0",
+  "description": "Step back from the immediate details to map the broader context, big picture, higher-level purpose, and relationships.",
+  "author": {
+    "name": "openjny",
+    "url": "https://github.com/openjny"
+  },
+  "homepage": "https://github.com/openjny/copilot-plugins/tree/main/plugins/zoom-out",
+  "repository": "https://github.com/openjny/copilot-plugins",
+  "license": "MIT",
+  "keywords": [
+    "copilot",
+    "big-picture",
+    "context",
+    "perspective"
+  ]
+}

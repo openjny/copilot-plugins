@@ -19,6 +19,8 @@ copilot plugin marketplace browse openjny
 ```shell
 copilot plugin install council@openjny
 copilot plugin install grilling@openjny
+copilot plugin install standard-ai-sdlc-repo@openjny
+copilot plugin install zoom-out@openjny
 ```
 
 List installed plugins:
@@ -33,6 +35,8 @@ copilot plugin list
 |:--|:--|
 | [`council`](plugins/council/) | Aggregates responses from multiple LLM models to reach a conclusion on complex or multi-perspective problems. |
 | [`grilling`](plugins/grilling/) | Relentlessly interviews the user to stress-test a plan or design before implementation. |
+| [`standard-ai-sdlc-repo`](plugins/standard-ai-sdlc-repo/) | Sets up or reviews a standard repository for AI-assisted software development with the essential files, documentation, governance, and agent context. |
+| [`zoom-out`](plugins/zoom-out/) | Steps back from the immediate details to map the broader context, big picture, higher-level purpose, and relationships. |
 
 ## Distribution
 
