@@ -1,0 +1,19 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+  "name": "postmortem",
+  "version": "1.0.0",
+  "description": "Review the preceding work, identify root causes of friction, and make improvements that prevent repeating it and make related work more efficient.",
+  "author": {
+    "name": "openjny",
+    "url": "https://github.com/openjny"
+  },
+  "homepage": "https://github.com/openjny/copilot-plugins/tree/main/plugins/postmortem",
+  "repository": "https://github.com/openjny/copilot-plugins",
+  "license": "MIT",
+  "keywords": [
+    "copilot",
+    "postmortem",
+    "retrospective",
+    "learning"
+  ]
+}

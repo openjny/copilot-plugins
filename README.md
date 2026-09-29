@@ -19,6 +19,8 @@ copilot plugin marketplace browse openjny
 ```shell
 copilot plugin install council@openjny
 copilot plugin install grilling@openjny
+copilot plugin install mise-en-place@openjny
+copilot plugin install postmortem@openjny
 copilot plugin install standard-ai-sdlc-repo@openjny
 copilot plugin install zoom-out@openjny
 ```
@@ -35,6 +37,8 @@ copilot plugin list
 |:--|:--|
 | [`council`](plugins/council/) | Aggregates responses from multiple LLM models to reach a conclusion on complex or multi-perspective problems. |
 | [`grilling`](plugins/grilling/) | Relentlessly interviews the user to stress-test an idea, position, or plan until reaching shared understanding. |
+| [`mise-en-place`](plugins/mise-en-place/) | Decides whether, where, in what format, and how much to write in a repository so that file responsibilities stay distinct and documents stay lean. Unrelated to the mise dev tool. |
+| [`postmortem`](plugins/postmortem/) | Reviews the preceding work, identifies root causes of friction, and makes improvements that prevent repeating it and make related work more efficient. |
 | [`standard-ai-sdlc-repo`](plugins/standard-ai-sdlc-repo/) | Sets up or reviews a standard repository for AI-assisted software development with the essential files, documentation, governance, and agent context. |
 | [`zoom-out`](plugins/zoom-out/) | Steps back from the immediate details to map the broader context, big picture, higher-level purpose, and relationships. |
 
