@@ -68,7 +68,7 @@
     },
     {
       "name": "postmortem",
-      "description": "Review the preceding work, identify root causes of friction, and propose improvements that prevent repeating it.",
+      "description": "Review the preceding work, identify root causes of friction, and make improvements that prevent repeating it and make related work more efficient.",
       "version": "1.0.0",
       "author": {
         "name": "openjny",
