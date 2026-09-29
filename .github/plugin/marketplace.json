@@ -2,7 +2,7 @@
   "name": "openjny",
   "metadata": {
     "description": "Public GitHub Copilot plugins from openjny",
-    "version": "1.1.0"
+    "version": "1.2.0"
   },
   "owner": {
     "name": "openjny",
@@ -29,6 +29,25 @@
       "source": "./plugins/council"
     },
     {
+      "name": "content-placement",
+      "description": "Decide where, in what format, and how much to write in a repository so that file responsibilities stay distinct and documents stay lean.",
+      "version": "1.0.0",
+      "author": {
+        "name": "openjny",
+        "url": "https://github.com/openjny"
+      },
+      "homepage": "https://github.com/openjny/copilot-plugins/tree/main/plugins/content-placement",
+      "repository": "https://github.com/openjny/copilot-plugins",
+      "keywords": [
+        "copilot",
+        "documentation",
+        "repository",
+        "policy"
+      ],
+      "license": "MIT",
+      "source": "./plugins/content-placement"
+    },
+    {
       "name": "grilling",
       "description": "Relentlessly interview the user to stress-test an idea, position, or plan until reaching shared understanding.",
       "version": "1.1.0",
@@ -46,6 +65,25 @@
       ],
       "license": "MIT",
       "source": "./plugins/grilling"
+    },
+    {
+      "name": "postmortem",
+      "description": "Review the preceding work, identify root causes of friction, and propose improvements that prevent repeating it.",
+      "version": "1.0.0",
+      "author": {
+        "name": "openjny",
+        "url": "https://github.com/openjny"
+      },
+      "homepage": "https://github.com/openjny/copilot-plugins/tree/main/plugins/postmortem",
+      "repository": "https://github.com/openjny/copilot-plugins",
+      "keywords": [
+        "copilot",
+        "postmortem",
+        "retrospective",
+        "learning"
+      ],
+      "license": "MIT",
+      "source": "./plugins/postmortem"
     },
     {
       "name": "standard-ai-sdlc-repo",
