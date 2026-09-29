@@ -1,13 +1,13 @@
 {
   "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
-  "name": "content-placement",
+  "name": "mise-en-place",
   "version": "1.0.0",
-  "description": "Decide where, in what format, and how much to write in a repository so that file responsibilities stay distinct and documents stay lean.",
+  "description": "Decide whether, where, in what format, and how much to write in a repository so that file responsibilities stay distinct and documents stay lean. Unrelated to the mise dev tool.",
   "author": {
     "name": "openjny",
     "url": "https://github.com/openjny"
   },
-  "homepage": "https://github.com/openjny/copilot-plugins/tree/main/plugins/content-placement",
+  "homepage": "https://github.com/openjny/copilot-plugins/tree/main/plugins/mise-en-place",
   "repository": "https://github.com/openjny/copilot-plugins",
   "license": "MIT",
   "keywords": [

@@ -29,25 +29,6 @@
       "source": "./plugins/council"
     },
     {
-      "name": "content-placement",
-      "description": "Decide where, in what format, and how much to write in a repository so that file responsibilities stay distinct and documents stay lean.",
-      "version": "1.0.0",
-      "author": {
-        "name": "openjny",
-        "url": "https://github.com/openjny"
-      },
-      "homepage": "https://github.com/openjny/copilot-plugins/tree/main/plugins/content-placement",
-      "repository": "https://github.com/openjny/copilot-plugins",
-      "keywords": [
-        "copilot",
-        "documentation",
-        "repository",
-        "policy"
-      ],
-      "license": "MIT",
-      "source": "./plugins/content-placement"
-    },
-    {
       "name": "grilling",
       "description": "Relentlessly interview the user to stress-test an idea, position, or plan until reaching shared understanding.",
       "version": "1.1.0",
@@ -65,6 +46,25 @@
       ],
       "license": "MIT",
       "source": "./plugins/grilling"
+    },
+    {
+      "name": "mise-en-place",
+      "description": "Decide whether, where, in what format, and how much to write in a repository so that file responsibilities stay distinct and documents stay lean. Unrelated to the mise dev tool.",
+      "version": "1.0.0",
+      "author": {
+        "name": "openjny",
+        "url": "https://github.com/openjny"
+      },
+      "homepage": "https://github.com/openjny/copilot-plugins/tree/main/plugins/mise-en-place",
+      "repository": "https://github.com/openjny/copilot-plugins",
+      "keywords": [
+        "copilot",
+        "documentation",
+        "repository",
+        "policy"
+      ],
+      "license": "MIT",
+      "source": "./plugins/mise-en-place"
     },
     {
       "name": "postmortem",
