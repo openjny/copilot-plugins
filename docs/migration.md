@@ -61,3 +61,19 @@
 実アカウント操作、字幕取得、カーシェア検索などは構造検証とは別のsmoke test。
 未検証のサービス操作を検証済みと扱わない。
 公開ghe-ops-skillsをarchiveしても公開履歴は残る。
+
+## 切替結果（2026-10-12）
+
+- 新しい2マーケットをCLIへ登録し、全16 Pluginをインストールして検証した。
+- ユーザーの追加判断により、この環境ではGHE系は不要。
+  `ghe-ops` はローカルからアンインストールしたが非公開正本には残す。
+- 現在のCLIは15 Plugin・20 Skill。インストール内容と正本のSkill定義を照合済み。
+- 旧personal-skills作業ツリーは未コミット変更・ignoredファイルを含め、
+  セッションの保全領域へ移動。通常のSkill検出先から外した。元履歴も保全済み。
+- 旧GHEの存在しないcacheを指す登録は、CLI uninstallで処理できなかったため、
+  対象の古いinstalledPluginsエントリだけを除去した。
+- VS Code / Insidersは既存の公式マーケットを保持し、新しい2マーケットへ
+  設定を更新。各クライアントの再読み込み・独自Plugin UIの動作は未確認。
+- personal-skills、agent-skills、ghe-ops-skillsはGitHubでarchive済み。
+- 古いクライアントキャッシュは削除していない。新しいチャットで有効な
+  PluginとSkillを確認してから、クライアントの正式な管理機能で整理する。
