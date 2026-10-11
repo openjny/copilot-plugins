@@ -25,7 +25,6 @@ copilot plugin install standard-ai-sdlc-repo@openjny
 copilot plugin install zoom-out@openjny
 copilot plugin install plan-skill@openjny
 copilot plugin install writing-skills@openjny
-copilot plugin install azure-ops@openjny
 ```
 
 List installed plugins:
@@ -46,13 +45,11 @@ copilot plugin list
 | [`zoom-out`](plugins/zoom-out/) | Steps back from the immediate details to map the broader context, big picture, higher-level purpose, and relationships. |
 | [`plan-skill`](plugins/plan-skill/) | 実行環境に適応した計画作成。計画のみを行い、実装しない。 |
 | [`writing-skills`](plugins/writing-skills/) | `anti-ai-writing` による表現レビューと `doc-lint` によるリンク・Markdown構造の検証。 |
-| [`azure-ops`](plugins/azure-ops/) | 公開APIによるAzure価格・更新情報の調査。 |
 
 ## 移行・保守
 
 - [移行対応表](docs/migration.md): 正本、廃止対象、検証と旧リポジトリの扱い。
 - [文章レビューと文書チェック](plugins/writing-skills/README.md)
-- [Azure公開情報の調査](plugins/azure-ops/README.md)
 - [文章チェックの出典](plugins/writing-skills/docs/LLMの文章に関する文献.md)
 
 ## Distribution

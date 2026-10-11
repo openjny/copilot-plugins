@@ -17,7 +17,6 @@
 | 旧agent-plugins / personal-skills | plan-skill | 計画専用を維持しホスト固有ツール参照を修正 |
 | 旧agent-plugins | writing-skills/anti-ai-writing | lint・テスト・日英参照を維持 |
 | personal-skills/link-liveness | writing-skills/doc-lint | 文書リンク・構造チェックへ再設計 |
-| agent-skills | azure-ops | azure-price-api、azure-updatesと補助assets/script |
 
 ## 非公開側
 
@@ -30,6 +29,7 @@
 | personal-skills | rakuten-carshare-check | 独立Plugin、検索専用 |
 | personal-skills | yt-transcript | 独立Plugin |
 | ghe-ops-skills | ghe-ops | clickops、ghe-webui、github-wafを維持 |
+| agent-skills（公開側から再移行） | azure-ops | azure-price-api、azure-updatesと補助assets/script |
 
 マーケット仕様とGHE知識の更新Skillは非公開リポジトリの `.github/skills` に残す。
 
@@ -67,7 +67,9 @@
 - 新しい2マーケットをCLIへ登録し、全16 Pluginをインストールして検証した。
 - ユーザーの追加判断により、この環境ではGHE系は不要。
   `ghe-ops` はローカルからアンインストールしたが非公開正本には残す。
-- 現在のCLIは15 Plugin・20 Skill。インストール内容と正本のSkill定義を照合済み。
+- `azure-ops` もこの環境では不要との判断でアンインストール。
+  移行後の正本は非公開側。現在のCLIは14 Plugin。
+  残した中央PluginのSkill定義は正本と照合済み。
 - 旧personal-skills作業ツリーは未コミット変更・ignoredファイルを含め、
   セッションの保全領域へ移動。通常のSkill検出先から外した。元履歴も保全済み。
 - 旧GHEの存在しないcacheを指す登録は、CLI uninstallで処理できなかったため、
@@ -75,5 +77,5 @@
 - VS Code / Insidersは既存の公式マーケットを保持し、新しい2マーケットへ
   設定を更新。各クライアントの再読み込み・独自Plugin UIの動作は未確認。
 - personal-skills、agent-skills、ghe-ops-skillsはGitHubでarchive済み。
-- 古いクライアントキャッシュは削除していない。新しいチャットで有効な
-  PluginとSkillを確認してから、クライアントの正式な管理機能で整理する。
+- 旧マーケットのクライアント管理コピー3か所は、未コミット変更がないことを
+  確認し、ユーザー承認のうえ削除済み。
