@@ -1,0 +1,13 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+  "name": "azure-ops",
+  "version": "1.0.0",
+  "description": "公開APIからAzureの価格と更新情報を調査する。認証やリソース変更は行わない。",
+  "author": {
+    "name": "openjny",
+    "url": "https://github.com/openjny"
+  },
+  "repository": "https://github.com/openjny/copilot-plugins",
+  "homepage": "https://github.com/openjny/copilot-plugins/tree/main/plugins/azure-ops",
+  "license": "MIT"
+}

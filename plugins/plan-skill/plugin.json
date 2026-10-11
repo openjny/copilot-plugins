@@ -1,0 +1,13 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+  "name": "plan-skill",
+  "version": "1.0.0",
+  "description": "調査・要件確認・設計・修正を繰り返して計画を作成する。実装は行わない。",
+  "author": {
+    "name": "openjny",
+    "url": "https://github.com/openjny"
+  },
+  "repository": "https://github.com/openjny/copilot-plugins",
+  "homepage": "https://github.com/openjny/copilot-plugins/tree/main/plugins/plan-skill",
+  "license": "MIT"
+}

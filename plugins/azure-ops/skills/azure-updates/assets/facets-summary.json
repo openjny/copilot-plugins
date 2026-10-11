@@ -1,0 +1,12 @@
+{
+  "extractedAt": "2026-01-23T07:44:31Z",
+  "extractionMethod": "full-scan",
+  "totalItems": 9336,
+  "facets": {
+    "productCategories": 21,
+    "tags": 17,
+    "products": 267,
+    "status": 3,
+    "availabilityRings": 4
+  }
+}

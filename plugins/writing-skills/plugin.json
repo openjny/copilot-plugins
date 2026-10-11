@@ -1,0 +1,13 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+  "name": "writing-skills",
+  "version": "1.0.0",
+  "description": "文章表現のレビューと、Markdownのリンク・構造検証を提供する。",
+  "author": {
+    "name": "openjny",
+    "url": "https://github.com/openjny"
+  },
+  "repository": "https://github.com/openjny/copilot-plugins",
+  "homepage": "https://github.com/openjny/copilot-plugins/tree/main/plugins/writing-skills",
+  "license": "MIT"
+}

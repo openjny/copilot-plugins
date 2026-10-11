@@ -1,7 +1,7 @@
 {
   "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
   "name": "council",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "Aggregate responses from multiple LLM models to reach a conclusion on complex or multi-perspective problems.",
   "author": {
     "name": "openjny",

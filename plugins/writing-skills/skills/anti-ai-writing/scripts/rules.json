@@ -1,0 +1,53 @@
+{
+  "schemaVersion": 2,
+  "rules": {
+    "common": [
+      {
+        "id": "common.em-dash",
+        "severity": "error",
+        "terms": ["—", "―"],
+        "message": "Replace the em dash or horizontal bar with a sentence break or punctuation."
+      }
+    ],
+    "ja": [
+      {
+        "id": "ja.line-ending-colon",
+        "severity": "warning",
+        "pattern": "(?m)[:：][ \\t]*(?=\\r?$)",
+        "message": "日本語ではコロンで行を終えない（例：次の通りです）。"
+      },
+      {
+        "id": "ja.warning-word",
+        "severity": "warning",
+        "terms": ["正本", "効く", "効いて", "効き", "壊れ", "境界", "実測", "静か", "瞬間", "黙って", "疑う", "事故", "別物", "照合", "断定"],
+        "message": "AI が多用しやすい語。文脈に合う一般的な表現へ置き換えられないか確認する。"
+      }
+    ],
+    "en": [
+      {
+        "id": "en.boilerplate",
+        "severity": "warning",
+        "pattern": "\\b(?:in today['’]s (?:fast-paced|ever-changing|digital) world|it(?: is|['’]s) (?:(?:important|worthwhile) to note|worth noting)|in conclusion)\\b",
+        "message": "Consider removing the announcement and stating the point directly."
+      },
+      {
+        "id": "en.cliche",
+        "severity": "warning",
+        "pattern": "\\b(?:delv(?:e|es|ed|ing) into|unlock(?:s|ed|ing)? the (?:potential|power) of|game[- ]changer)\\b",
+        "message": "Replace the stock phrase with a concrete action or result."
+      },
+      {
+        "id": "en.inflated",
+        "severity": "warning",
+        "pattern": "\\b(?:seamlessly|groundbreaking|revolutionary|leverage|utilize)\\b",
+        "message": "Check the evidence or choose a precise everyday word."
+      },
+      {
+        "id": "en.not-only",
+        "severity": "warning",
+        "pattern": "\\bnot (?:just|only)\\b[^.!?\\n]{1,100}\\bbut also\\b",
+        "message": "Check whether this contrast adds information rather than a familiar template."
+      }
+    ]
+  }
+}

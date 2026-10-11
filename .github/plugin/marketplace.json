@@ -2,7 +2,7 @@
   "name": "openjny",
   "metadata": {
     "description": "Public GitHub Copilot plugins from openjny",
-    "version": "1.2.0"
+    "version": "1.3.0"
   },
   "owner": {
     "name": "openjny",
@@ -12,7 +12,7 @@
     {
       "name": "council",
       "description": "Aggregate responses from multiple LLM models to reach a conclusion on complex or multi-perspective problems.",
-      "version": "1.0.0",
+      "version": "1.1.0",
       "author": {
         "name": "openjny",
         "url": "https://github.com/openjny"
@@ -122,6 +122,45 @@
       ],
       "license": "MIT",
       "source": "./plugins/zoom-out"
+    },
+    {
+      "name": "plan-skill",
+      "version": "1.0.0",
+      "description": "調査・要件確認・設計・修正を繰り返して計画を作成する。実装は行わない。",
+      "author": {
+        "name": "openjny",
+        "url": "https://github.com/openjny"
+      },
+      "repository": "https://github.com/openjny/copilot-plugins",
+      "homepage": "https://github.com/openjny/copilot-plugins/tree/main/plugins/plan-skill",
+      "license": "MIT",
+      "source": "./plugins/plan-skill"
+    },
+    {
+      "name": "writing-skills",
+      "version": "1.0.0",
+      "description": "文章表現のレビューと、Markdownのリンク・構造検証を提供する。",
+      "author": {
+        "name": "openjny",
+        "url": "https://github.com/openjny"
+      },
+      "repository": "https://github.com/openjny/copilot-plugins",
+      "homepage": "https://github.com/openjny/copilot-plugins/tree/main/plugins/writing-skills",
+      "license": "MIT",
+      "source": "./plugins/writing-skills"
+    },
+    {
+      "name": "azure-ops",
+      "version": "1.0.0",
+      "description": "公開APIからAzureの価格と更新情報を調査する。認証やリソース変更は行わない。",
+      "author": {
+        "name": "openjny",
+        "url": "https://github.com/openjny"
+      },
+      "repository": "https://github.com/openjny/copilot-plugins",
+      "homepage": "https://github.com/openjny/copilot-plugins/tree/main/plugins/azure-ops",
+      "license": "MIT",
+      "source": "./plugins/azure-ops"
     }
   ]
 }
