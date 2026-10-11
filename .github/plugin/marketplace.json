@@ -138,7 +138,7 @@
     },
     {
       "name": "writing-skills",
-      "version": "1.0.0",
+      "version": "1.0.1",
       "description": "文章表現のレビューと、Markdownのリンク・構造検証を提供する。",
       "author": {
         "name": "openjny",

@@ -22,4 +22,4 @@ uv run --no-project python -m unittest discover \
 ```
 
 doc-lintの実行・検証方法は [Skill定義](skills/doc-lint/SKILL.md) を参照。
-背景資料は [LLMの文章に関する文献](docs/LLMの文章に関する文献.md) にまとめる。
+背景資料は [LLMの文章に関する文献](references/LLMの文章に関する文献.md) にまとめる。

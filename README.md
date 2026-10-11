@@ -48,9 +48,8 @@ copilot plugin list
 
 ## 移行・保守
 
-- [移行対応表](docs/migration.md): 正本、廃止対象、検証と旧リポジトリの扱い。
 - [文章レビューと文書チェック](plugins/writing-skills/README.md)
-- [文章チェックの出典](plugins/writing-skills/docs/LLMの文章に関する文献.md)
+- [文章チェックの出典](plugins/writing-skills/references/LLMの文章に関する文献.md)
 
 ## Distribution
 
