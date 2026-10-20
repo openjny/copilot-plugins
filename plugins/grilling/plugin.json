@@ -1,7 +1,7 @@
 {
   "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
   "name": "grilling",
-  "version": "1.1.0",
+  "version": "1.1.1",
   "description": "Relentlessly interview the user to stress-test an idea, position, or plan until reaching shared understanding.",
   "author": {
     "name": "openjny",

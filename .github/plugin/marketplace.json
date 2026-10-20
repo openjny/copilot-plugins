@@ -2,7 +2,7 @@
   "name": "openjny",
   "metadata": {
     "description": "Public GitHub Copilot plugins from openjny",
-    "version": "1.4.0"
+    "version": "1.4.1"
   },
   "owner": {
     "name": "openjny",
@@ -31,7 +31,7 @@
     {
       "name": "grilling",
       "description": "Relentlessly interview the user to stress-test an idea, position, or plan until reaching shared understanding.",
-      "version": "1.1.0",
+      "version": "1.1.1",
       "author": {
         "name": "openjny",
         "url": "https://github.com/openjny"
