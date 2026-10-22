@@ -5,9 +5,9 @@
 | Skill | 責務 |
 | --- | --- |
 | [anti-ai-writing](skills/anti-ai-writing/SKILL.md) | 日英の表現レビュー。補助lintで検出した結果を文脈に合わせて判断する。 |
-| [doc-lint](skills/doc-lint/SKILL.md) | URL・相対リンク・アンカー、Markdown見出し・構文・表のチェック。 |
+| [markdown-check](skills/markdown-check/SKILL.md) | URL・相対リンク・アンカー、Markdown見出し・構文・表のチェック。 |
 
-`doc-lint` は通常は報告のみ。書き換えは依頼があったときに別途行う。
+`markdown-check` は通常は報告のみ。書き換えは依頼があったときに別途行う。
 外部URLの死活確認はオフラインの静的検証と区別する。
 用語ゆれ、意味の整合性、外部情報による事実確認は初期範囲に含めない。
 
@@ -21,5 +21,5 @@ uv run --no-project python -m unittest discover \
   -s plugins/writing-skills/skills/anti-ai-writing/scripts -p 'test_*.py'
 ```
 
-doc-lintの実行・検証方法は [Skill定義](skills/doc-lint/SKILL.md) を参照。
+markdown-checkの実行・検証方法は [Skill定義](skills/markdown-check/SKILL.md) を参照。
 背景資料は [LLMの文章に関する文献](references/LLMの文章に関する文献.md) にまとめる。

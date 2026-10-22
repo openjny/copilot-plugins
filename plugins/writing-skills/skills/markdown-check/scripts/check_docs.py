@@ -258,7 +258,7 @@ def request_public(url: str, method: str, timeout: float) -> tuple[int, str | No
     connection._create_connection = lambda address, timeout, source_address=None: socket.create_connection(
         (ip, port), timeout, source_address)
     try:
-        connection.request(method, parsed.path or "/", headers={"User-Agent": "doc-lint/1.0"})
+        connection.request(method, parsed.path or "/", headers={"User-Agent": "markdown-check/1.0"})
         response = connection.getresponse()
         return response.status, response.getheader("Location")
     finally:

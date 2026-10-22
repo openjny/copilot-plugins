@@ -247,7 +247,7 @@ class NetworkTests(unittest.TestCase):
         cls.assert_called_once_with("example.com", 443, timeout=15)
         connect.assert_called_once_with(("93.184.216.34", 443), 15, None)
         connection.request.assert_called_once_with(
-            "HEAD", "/path", headers={"User-Agent": "doc-lint/1.0"})
+            "HEAD", "/path", headers={"User-Agent": "markdown-check/1.0"})
         connection.getresponse.return_value.read.assert_not_called()
         connection.close.assert_called_once()
 

@@ -1,10 +1,10 @@
 ---
-name: doc-lint
-description: "Use when: Markdown 文書のリンクチェック、リンク切れ、URL 検証、相対リンク・anchor・reference link、見出し・構文・表の構造を著者や生成方法に関係なく検査したいとき。doc lint / document check / broken link / validate URLs。既定は offline・report-only。文章の品質評価・リライト、認証付き HTTP、localhost の検査には使わない。"
+name: markdown-check
+description: "Use when: Markdown 文書のリンクチェック、リンク切れ、URL 検証、相対リンク・anchor・reference link、見出し・構文・表の構造を著者や生成方法に関係なく検査したいとき。markdown check / doc lint / document check / broken link / validate URLs。既定は offline・report-only。文章の品質評価・リライト、認証付き HTTP、localhost の検査には使わない。"
 license: MIT
 ---
 
-# doc-lint
+# markdown-check
 
 著者を問わず Markdown の機械的な問題を報告する。
 対象は URL・相対リンク・anchor と Markdown の見出し・構文・表構造だけ。

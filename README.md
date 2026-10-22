@@ -45,7 +45,7 @@ copilot plugin list
 | [`standard-ai-sdlc-repo`](plugins/standard-ai-sdlc-repo/) | Sets up or reviews a standard repository for AI-assisted software development with the essential files, documentation, governance, and agent context. |
 | [`zoom-out`](plugins/zoom-out/) | Steps back from the immediate details to map the broader context, big picture, higher-level purpose, and relationships. |
 | [`plan-skill`](plugins/plan-skill/) | 実行環境に適応した計画作成。計画のみを行い、実装しない。 |
-| [`writing-skills`](plugins/writing-skills/) | `anti-ai-writing` による表現レビューと `doc-lint` によるリンク・Markdown構造の検証。 |
+| [`writing-skills`](plugins/writing-skills/) | `anti-ai-writing` による表現レビューと `markdown-check` によるリンク・Markdown構造の検証。 |
 | [`slide-cookbook`](plugins/slide-cookbook/) | Finds slide structure, diagram, and design references from Slideland when creating or editing slides. |
 
 ## 移行・保守
