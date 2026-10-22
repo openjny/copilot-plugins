@@ -28,6 +28,12 @@ class RuleTests(unittest.TestCase):
             "common.em-dash": ("both", "A—B"),
             "ja.line-ending-colon": ("ja", "要素：\nテスト"),
             "ja.warning-word": ("ja", "このDBを正本として扱う。"),
+            "ja.vague-attribution": ("ja", "専門家によると、この方式が最適だ。"),
+            "ja.not-just-template": ("ja", "これは単なる検索ではなく、発見の体験だ。"),
+            "ja.generic-conclusion": ("ja", "今後の発展が期待される。"),
+            "ja.inline-header-list": ("ja", "- **性能:** 性能が向上した。"),
+            "ja.light-verb": ("ja", "設定の検証を行う。"),
+            "ja.arrow-shorthand": ("ja", "入力 → 検証 → 保存"),
             "en.boilerplate": ("en", "In today's fast-paced world, teams need time."),
             "en.cliche": ("en", "We delve into the results."),
             "en.inflated": ("en", "This is groundbreaking."),
@@ -96,6 +102,31 @@ class RuleTests(unittest.TestCase):
             with self.subTest(text=text):
                 self.assertEqual(["ja.line-ending-colon"], rule_ids(text))
         for text in ("項目： 本文", "項目: 本文"):
+            with self.subTest(text=text):
+                self.assertEqual([], rule_ids(text))
+
+    def test_japanese_style_rule_severities(self):
+        expected = {
+            "ja.vague-attribution": ("warning", "研究によると、効果がある。"),
+            "ja.not-just-template": ("warning", "単なる道具ではなく、仲間だ。"),
+            "ja.generic-conclusion": ("warning", "今後ますます重要になる。"),
+            "ja.inline-header-list": ("info", "1. **性能**: 速くなった。"),
+            "ja.light-verb": ("info", "調査を実施した。"),
+            "ja.arrow-shorthand": ("info", "入力⇒出力"),
+        }
+        for rule, (severity, text) in expected.items():
+            with self.subTest(rule=rule):
+                findings = [item for item in lint.lint(text, "ja") if item.rule == rule]
+                self.assertEqual([severity], [item.severity for item in findings])
+
+    def test_japanese_style_rules_ignore_legitimate_text(self):
+        for text in (
+            "単なる数値として扱う。",
+            "正方行列を行ごとに分ける。",
+            "入力 `→` 出力の記号を使う。",
+            "- **スキーマは TypeScript で書く。** テーブルは 1 ファイルにまとめる。",
+            "A 社の2024年の調査では、導入率は40%だった。",
+        ):
             with self.subTest(text=text):
                 self.assertEqual([], rule_ids(text))
 
