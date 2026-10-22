@@ -35,19 +35,6 @@ Read [SKILL.md](../SKILL.md) for shared principles and the checking workflow. Th
 - Do not over-abstract. "Handle errors appropriately" names nothing. State the object, the value, and the condition. When an abstract statement alone does not land, add one concrete example built from facts you have checked.
 - Set the level for the reader. Lead with an example for someone new to the topic, and with the general statement for someone who knows the mechanism.
 
-## Script coverage
+## What the script cannot judge
 
-Enabled with `--language en` or `both`. The shared `common.em-dash` check also runs. Phrase matching is case-insensitive and uses word boundaries.
-
-| Rule ID | What it flags |
-| --- | --- |
-| `en.boilerplate` | Stock openings and announcements |
-| `en.cliche` | "Delve into", "unlock the potential/power of", "game-changer" |
-| `en.inflated` | Promotional or inflated vocabulary |
-| `en.not-only` | "Not just/only ... but also ..." within one line |
-| `en.repeated-opening` | Three consecutive sentences with the same first two words in one paragraph |
-| `en.connective-overuse` | Two or more listed sentence-opening connectors in one paragraph |
-
-Sentence boundaries are approximated from punctuation, not parsed linguistically. Abbreviations and quotations can produce false positives. Review the original text before changing it.
-
-The script cannot determine whether a claim is supported, a metaphor is useful, or a tone suits the reader. A clean result does not replace a full read-through.
+The script cannot determine whether a claim is supported, a metaphor is useful, or a tone suits the reader. Check these by reading the whole text.

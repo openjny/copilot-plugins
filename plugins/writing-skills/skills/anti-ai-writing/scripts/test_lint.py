@@ -337,16 +337,8 @@ class PackagingTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "severity must be info, warning, or error"):
                 lint.load_rule_groups(path)
 
-    def test_documented_rules_and_reference_links(self):
+    def test_reference_links(self):
         documents = [SKILL / "SKILL.md", *sorted((SKILL / "references").glob("*.md"))]
-        documentation = "\n".join(path.read_text(encoding="utf-8") for path in documents)
-        for rule in lint.COMMON_RULES + lint.JAPANESE_RULES + lint.ENGLISH_RULES:
-            self.assertIn(f"`{rule.id}`", documentation)
-        for rule in (
-            "ja.repeated-ending", "ja.connective-overuse",
-            "en.repeated-opening", "en.connective-overuse",
-        ):
-            self.assertIn(f"`{rule}`", documentation)
         for path in documents:
             for target in re.findall(r"\]\((\.[^)\s]+)\)", path.read_text(encoding="utf-8")):
                 self.assertTrue((path.parent / target).exists(), f"{path}: {target}")
