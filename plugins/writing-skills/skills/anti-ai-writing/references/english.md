@@ -33,11 +33,7 @@ Read [SKILL.md](../SKILL.md) for shared principles and the checking workflow. Th
 - Keep history only when the reader would otherwise get it wrong: a migration path, a compatibility boundary, or the reason the current design exists. Put the current state first and the history in one sentence.
 - Do not paste a one-off event into a general explanation. Replace "after the October 21 outage" or "as Alex pointed out" with the property or condition the event showed. Keep the event when it is the subject, as in an incident report or meeting notes.
 - Do not over-abstract. "Handle errors appropriately" names nothing. State the object, the value, and the condition. When an abstract statement alone does not land, add one concrete example built from facts you have checked.
-- Set the level from the reader and the situation in which the text will be read. Before writing, picture who reads it (what they already know, their role) and when (learning for the first time, looking something up in a hurry, acting at once, reading later without the history). Then pick the level that lets that reader take the next step.
-  - A newcomer learning the topic: lead with an example, then add a short general statement.
-  - A knowledgeable reader checking or deciding: state the general rule and its conditions. Add an example only at a boundary that is easy to misread.
-  - A reader acting at once, such as during an incident: give the actual command, value, and steps. Put background after them or behind a link.
-  - A reader who lacks the history, such as a successor or yourself in a few months: generalize the event, keep the reason for the decision, and explain or avoid in-group names and abbreviations.
+- When you cannot decide the level of abstraction, imagine who might read the text and in what situations. Listing a few candidate readers and situations shows roughly where the level belongs. This is a prompt for thinking when you are stuck, not a rule that fixes the level.
 
 ## What the script cannot judge
 

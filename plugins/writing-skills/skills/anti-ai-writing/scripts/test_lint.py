@@ -28,6 +28,7 @@ class RuleTests(unittest.TestCase):
             "common.em-dash": ("both", "A—B"),
             "ja.line-ending-colon": ("ja", "要素：\nテスト"),
             "ja.warning-word": ("ja", "このDBを正本として扱う。"),
+            "ja.heading-punctuation": ("ja", "## 設計、実装、検証"),
             "ja.vague-attribution": ("ja", "専門家によると、この方式が最適だ。"),
             "ja.not-just-template": ("ja", "これは単なる検索ではなく、発見の体験だ。"),
             "ja.generic-conclusion": ("ja", "今後の発展が期待される。"),
@@ -102,6 +103,20 @@ class RuleTests(unittest.TestCase):
             with self.subTest(text=text):
                 self.assertEqual(["ja.line-ending-colon"], rule_ids(text))
         for text in ("項目： 本文", "項目: 本文"):
+            with self.subTest(text=text):
+                self.assertEqual([], rule_ids(text))
+
+    def test_heading_punctuation_only_flags_headings(self):
+        for text in ("# 設計、実装", "## 手順を確認する。", "### 見出し、リンク"):
+            with self.subTest(text=text):
+                self.assertEqual(["ja.heading-punctuation"], rule_ids(text))
+        for text in (
+            "## 設計・実装・検証",
+            "## 設計と実装",
+            "本文です、読点があります。",
+            "- 設計、実装、検証",
+            "```\n# 設計、実装\n```",
+        ):
             with self.subTest(text=text):
                 self.assertEqual([], rule_ids(text))
 
