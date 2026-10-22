@@ -27,6 +27,14 @@ Read [SKILL.md](../SKILL.md) for shared principles and the checking workflow. Th
 - Use contractions and conversational phrasing only when they fit the audience. Do not add slang or fabricated personal anecdotes to sound human.
 - State a recommendation and its reason instead of ending with a generic balance of pros and cons. Keep genuine uncertainty.
 
+## Content and level of abstraction
+
+- Describe the current state. Do not retell the history or list every earlier version. Leave change tracking to Git or a changelog.
+- Keep history only when the reader would otherwise get it wrong: a migration path, a compatibility boundary, or the reason the current design exists. Put the current state first and the history in one sentence.
+- Do not paste a one-off event into a general explanation. Replace "after the October 21 outage" or "as Alex pointed out" with the property or condition the event showed. Keep the event when it is the subject, as in an incident report or meeting notes.
+- Do not over-abstract. "Handle errors appropriately" names nothing. State the object, the value, and the condition. When an abstract statement alone does not land, add one concrete example built from facts you have checked.
+- Set the level for the reader. Lead with an example for someone new to the topic, and with the general statement for someone who knows the mechanism.
+
 ## Script coverage
 
 Enabled with `--language en` or `both`. The shared `common.em-dash` check also runs. Phrase matching is case-insensitive and uses word boundaries.
