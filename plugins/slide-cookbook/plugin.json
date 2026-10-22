@@ -1,0 +1,19 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+  "name": "slide-cookbook",
+  "version": "1.0.0",
+  "description": "Find slide structure, diagram, and design references from Slideland when creating or editing slides.",
+  "author": {
+    "name": "openjny",
+    "url": "https://github.com/openjny"
+  },
+  "homepage": "https://github.com/openjny/copilot-plugins/tree/main/plugins/slide-cookbook",
+  "repository": "https://github.com/openjny/copilot-plugins",
+  "license": "MIT",
+  "keywords": [
+    "copilot",
+    "slides",
+    "presentation",
+    "design-reference"
+  ]
+}

@@ -148,6 +148,25 @@
       "homepage": "https://github.com/openjny/copilot-plugins/tree/main/plugins/writing-skills",
       "license": "MIT",
       "source": "./plugins/writing-skills"
+    },
+    {
+      "name": "slide-cookbook",
+      "version": "1.0.0",
+      "description": "Find slide structure, diagram, and design references from Slideland when creating or editing slides.",
+      "author": {
+        "name": "openjny",
+        "url": "https://github.com/openjny"
+      },
+      "repository": "https://github.com/openjny/copilot-plugins",
+      "homepage": "https://github.com/openjny/copilot-plugins/tree/main/plugins/slide-cookbook",
+      "keywords": [
+        "copilot",
+        "slides",
+        "presentation",
+        "design-reference"
+      ],
+      "license": "MIT",
+      "source": "./plugins/slide-cookbook"
     }
   ]
 }
