@@ -27,6 +27,9 @@ class RuleTests(unittest.TestCase):
         examples = {
             "common.em-dash": ("both", "A—B"),
             "ja.line-ending-colon": ("ja", "要素：\nテスト"),
+            "ja.heading-bold": ("ja", "## **重要な見出し**"),
+            "ja.boilerplate": ("ja", "いかがでしたでしょうか。"),
+            "ja.vague-buzzword": ("ja", "課題の解像度を上げる。"),
             "ja.warning-word": ("ja", "このDBを正本として扱う。"),
             "ja.heading-punctuation": ("ja", "## 設計、実装、検証"),
             "ja.vague-attribution": ("ja", "専門家によると、この方式が最適だ。"),
@@ -145,6 +148,16 @@ class RuleTests(unittest.TestCase):
             with self.subTest(text=text):
                 self.assertEqual([], rule_ids(text))
 
+    def test_japanese_heading_bold_and_not_just_template(self):
+        self.assertEqual(["ja.heading-bold"], rule_ids("### **見出し**\n本文"))
+        self.assertEqual([], rule_ids("### 見出し\n本文の**強調**は対象外。"))
+        for text in (
+            "これは単なる改善ではなく改革です。",
+            "この手法は銀の弾丸ではありません。",
+            "導入すれば自動的に解決するわけではありません。",
+        ):
+            with self.subTest(text=text):
+                self.assertIn("ja.not-just-template", rule_ids(text))
     def test_japanese_repeated_ending_threshold(self):
         self.assertNotIn("ja.repeated-ending", rule_ids("対象です。予定です。"))
         text = "対象です。\n予定です。\n必要です。\n同様です。"
