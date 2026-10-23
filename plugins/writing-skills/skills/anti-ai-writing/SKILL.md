@@ -54,9 +54,9 @@ uv run --no-project "<skill-directory>/scripts/lint.py" --language en draft.md -
 uv run --no-project "<skill-directory>/scripts/lint.py" --language both draft.md
 ```
 
-- **入力とオプション**: ファイルパスの代わりに `-` を渡すと標準入力から読み込む。`--language` には `ja` / `en` / `both` のいずれかを明示する。`--json` を付けると、`file`・`language`・`findings`（各要素は `rule`、`severity`、1 始まりの `line` / `column`、`message`、`excerpt`）を JSON で出力する。
-- **終了コード**: `0` は指摘なし（または `info` のみ）、`1` は要確認の指摘（`warning` / `error`）あり、`2` は引数・入力・ルール定義のエラーを表す。終了コード `1` はスクリプトの異常終了ではなく、確認すべき指摘が見つかったことを意味する。
-- **検査対象の範囲**: コードブロック・インラインコード・インデントされたコード行・先頭の YAML front matter・HTML コメント・URL・Markdown のリンク先 URL は検査から除外される。見出し・箇条書き・引用の本文およびリンクの表示テキストは検査対象となる。
-- **ルール定義**: 検出する語句と正規表現は [scripts/rules.json](./scripts/rules.json) で管理する。語句リストは `terms`、正規表現は `pattern` に記述し、`severity` には `info`（参考情報）・`warning`（要確認）・`error`（使用禁止）のいずれかを指定する。用途と修正方針が異なる語は、同じ配列へ混ぜず別のルール ID とメッセージに分ける。
+- ファイルパスの代わりに `-` を渡すと標準入力から読み込む。`--language` には `ja` / `en` / `both` のいずれかを明示する。`--json` を付けると、`file`・`language`・`findings`（各要素は `rule`、`severity`、1 始まりの `line` / `column`、`message`、`excerpt`）を JSON で出力する。
+- 終了コードは `0` が指摘なし（または `info` のみ）、`1` が要確認の指摘（`warning` / `error`）あり、`2` が引数・入力・ルール定義のエラーを表す。終了コード `1` はスクリプトの異常終了ではなく、確認すべき指摘が見つかったことを意味する。
+- コードブロック・インラインコード・インデントされたコード行・先頭の YAML front matter・HTML コメント・URL・Markdown のリンク先 URL は検査から除外される。見出し・箇条書き・引用の本文およびリンクの表示テキストは検査対象となる。
+- 検出する語句と正規表現は [scripts/rules.json](./scripts/rules.json) で管理する。語句リストは `terms`、正規表現は `pattern` に記述し、`severity` には `info`（参考情報）・`warning`（要確認）・`error`（使用禁止）のいずれかを指定する。用途と修正方針が異なる語は、同じ配列へ混ぜず別のルール ID とメッセージに分ける。
 
 スクリプトが検出するのは、登録された語句・記号・同じ語尾や接続詞の反復といった表層的なパターンのみである。文脈の妥当性や事実関係までは判定できないため、指摘がゼロでも必ず通読して仕上げる。
