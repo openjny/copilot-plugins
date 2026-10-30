@@ -287,7 +287,7 @@ def main(argv: list[str] | None = None) -> int:
                 f"{item.severity}: {item.rule}: {item.message}"
             )
             print(f"  {item.excerpt}")
-        print(f"{len(findings)} finding(s). Review in context; this is not an AI-authorship score.")
+        print(f"{len(findings)} finding(s). Review in context; findings are prompts for review, not a quality score.")
     return 1 if any(item.severity != "info" for item in findings) else 0
 
 

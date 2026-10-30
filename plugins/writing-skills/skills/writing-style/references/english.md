@@ -1,6 +1,6 @@
 # English expression checks
 
-Read [SKILL.md](../SKILL.md) for shared principles and the checking workflow. These are editing prompts, not evidence that a text was written by AI.
+Read [principles.md](./principles.md) for the shared principles and [SKILL.md](../SKILL.md) for the checking workflow. These are editing prompts, not rules to apply mechanically. Judge each case in context.
 
 ## Punctuation and formatting
 
@@ -24,7 +24,7 @@ Read [SKILL.md](../SKILL.md) for shared principles and the checking workflow. Th
 - Avoid opening three consecutive sentences with the same two words. Recast the argument rather than swapping in synonyms mechanically.
 - Remove unnecessary "Furthermore", "Moreover", "Additionally", and "Therefore". The relationship should usually be apparent from the content.
 - Vary sentence and paragraph length where the argument calls for it. Do not make every section a claim, three bullets, and a recap.
-- Use contractions and conversational phrasing only when they fit the audience. Do not add slang or fabricated personal anecdotes to sound human.
+- Use contractions and conversational phrasing only when they fit the audience. Do not add slang or fabricated personal anecdotes to sound engaging.
 - State a recommendation and its reason instead of ending with a generic balance of pros and cons. Keep genuine uncertainty.
 
 ## Content and level of abstraction
