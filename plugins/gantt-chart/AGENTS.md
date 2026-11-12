@@ -17,7 +17,7 @@
 - 単体テスト（`extensions/gantt-chart` で）: `node --test test\model.test.mjs test\chart.test.mjs test\i18n.test.mjs test\validate.test.mjs`。`node --test` にディレクトリは渡せないので、ファイルを並べます。
 - 手元で試すときは、インストール済みのコピー（`~/.copilot/installed-plugins/openjny/gantt-chart/extensions/gantt-chart`）に、`node_modules` と `test` を除いて上書きします（`robocopy` の終了コード 1 は成功です）。
 - `assets/` と `lib/locales/` は読み直されるので、リロードは要りません。`lib/*.mjs` と `extension.mjs` を変えたら `extensions_reload` を、上書きとは別の呼び出しで行い、新しい instanceId でキャンバスを開き直します。
-- 画面は Playwright（playwright-core と Edge）で確かめています。再現スクリプトはまだリポジトリに入っていません。`test/ui/` に、ダミーの計画ファイルと一緒に置くのが次の課題です。スクリプトは、サーバー側に残る設定（言語 `locale.json`、画面の `view.json`。`view.json` には一覧の列 `cols` も入り、既定はタスク名だけです）を、始めと終わりに初期値へ戻します。戻さないと、次のスクリプトが前の言語や前の列で動いて、順番によって失敗します。
+- 画面は Playwright（playwright-core と Edge）で確かめています。再現スクリプトはまだリポジトリに入っていません。`test/ui/` に、ダミーの計画ファイルと一緒に置くのが次の課題です。スクリプトは、サーバー側に残る設定（言語 `locale.json`、画面の `view.json`。`view.json` には一覧の列 `cols`、詳細パネルとステータスバーで隠す項目 `panelOff`、`statusOff` も入り、既定はすべて空です）を、始めと終わりに初期値へ戻します。戻さないと、次のスクリプトが前の言語や前の列で動いて、順番によって失敗します。言語を `auto` に戻すときは `resolved` を付けなくても OS の言語になります（Playwright のブラウザーは、OS が日本語でも `en-US` を名乗るので、英語の画面を確かめるときは `locale: 'en'` を明示して保存します）。
 
 ## 守ること
 
@@ -25,7 +25,12 @@
 - 稼働日は、毎週の休み（`weeklyOff`。既定は土曜と日曜）の曜日と、`holidays` に入っている日を除いた日と、`extraWorkdays` に入れた日です（両方に入っている日は働く日です）。日付を決める関数はすべて `makeCalendar` の `isWorkday` を通します。週の始まり（`weekStart`）は表示だけで、休みの決め方には関わりません。画面の右クリックでの切り替え（`toggleWorkday`）は、曜日の決まりと違うときだけ、その日をどちらかのリストに入れます（`cal.isRegular` が、曜日だけで決まる状態です）。
 - ファイル形式は version 4 です。タスクの値は `props`（プロパティの名前をキーにした連想配列）に入り、プロジェクトが `properties` で定義を持ちます。工数のような項目は、組み込みではなくプロパティです（担当 `resources` だけは、組み込みのまま残しています）。version 2 と version 3 は `readDoc` が読み込み時に直します（`effort` → `estimate` → 数値のプロパティ「想定工数」と「実績工数」。使われていたものだけを作ります）。形式を変えるときは、読み込み側で古い version を直すか、`unsupported_version` にするかを決めて、テストに書きます。
 - プロパティの値の検査は `checkValue`（ひとつの値）と `checkProps`（タスク全体）にあり、`finalize`（編集のあと）と `readDoc`（読み込み）の両方が通ります。JSON Schema は値の中身を定義しません（名前が動的なため）。親タスクが合計などを出すプロパティ（`aggregate`）の値は、`finalize` が親から消し、`schedule` が `row.props` に子から計算して入れます。画面は、値を読むときは `row.props`、編集するときは `task.props` を使います。
-- 一覧の列のキーは、`name`、`dur`、`res`、プロパティの `p:<名前>` です。名前に引用符やカンマが入りうるので、CSS セレクターや HTML の属性に直接入れず（`data-cols` は JSON を URL エンコードしています）、要素は `dataset.key` で探します。プロパティの名前を変える・消すときは、`renameCol` が列を追従させます（`view.json` は画面全体で 1 つなので、別のファイルの同名のプロパティにも効きます）。
+- 一覧の列のキーは、`name`、`dur`、`res`、プロパティの `p:<名前>` です。名前に引用符やカンマが入りうるので、CSS セレクターや HTML の属性に直接入れず（`data-cols` は JSON を URL エンコードしています）、要素は `dataset.key` で探します。プロパティの名前を変える・消すときは、`renameCol` が列、詳細パネルの隠す項目（`panelOff`）、ステータスバーの隠す項目（`statusOff`）の 3 つを追従させます（`view.json` は画面全体で 1 つなので、別のファイルの同名のプロパティにも効きます）。`panelOff` と `statusOff` は、出す項目ではなく隠す項目を持ちます。項目を足したときに、既存の利用者の画面にも出るようにするためです。
+- `saveView` は、読み込み・更新・書き込みを 1 つずつ行うよう直列にしています（`viewQueue`）。名前の変更は 3 つのリストを続けて送るので、並行に処理すると、後の書き込みが前の更新を消します（`chart.test.mjs` に、同時に送るテストがあります）。
+- 言語の「自動」は OS の言語（`osLocale()`、Node の `Intl`）です。ブラウザーは、OS が日本語でも英語を名乗ることがあるためです。サーバーが `data-os-locale` を `<html>` に入れ、ページはそれを使います。`/api/locale` に `resolved` がないときも、サーバーは OS の言語を使います。
+- 「フォルダーを開く」は `/api/reveal` です。パスはクライアントから受け取らず、開いているファイルだけを `Chart` が `lib/reveal.mjs` に渡します。テストでは `Chart` の `reveal` オプションで差し替えます（実際にエクスプローラーが開くので、テストで本物は呼びません）。
+- 拡大の上限は、「日」表示の標準（`PPD.day` と `ROW_STD`）です。Ctrl+スクロール、Ctrl+↑、ヘッダーのセルのクリックは、すべて `setScale` を通るので、上限もそこで掛かります。
+- 一覧の行のドラッグ並べ替え（「Reordering」の節）は、縦に 5 px 動くまで始まりません。pointerdown で `preventDefault` やキャプチャをすると `dblclick` が届かなくなるためです。ドラッグ中は `app.rowDrag` で、サーバーからの更新による再描画を後回しにし（`pendingRender`）、元に戻す・やり直しを止めます。置く場所は `move` の操作の列にして `previewOps` で検証し、できない場所には線を出しません。
 - 日程が動く操作（つなぐ、期間を変える、右へ動かす）には、画面で事前の表示と「元に戻す」を付けます。`applyOps` が返す `shifted` と `dropped` を使い、画面は同じ関数で事前に計算します（`previewOps`）。
 - ja と en のキーは同じにします（`i18n.test.mjs` が確かめます）。数で文が変わるときは `key.one` と `key.other` を使いますが、ja は `other` しか選ばれません。名前を入れたい文は、1 件用と複数用（`key` と `keyMany`）に分けます。
 - ソースは `edit` ツールで直します。PowerShell の文字列置換は、バッククォートや `$` で壊れやすく、失敗しても何も書き込まれないことがあります。

@@ -2,7 +2,7 @@ import { CanvasError, createCanvas, joinSession } from '@github/copilot-sdk/exte
 import { Chart } from './lib/chart.mjs';
 import { resolveLocale, setLocale, t } from './lib/i18n.mjs';
 import { AGGREGATES, COLORS, MAX_LAG, ModelError, OPS, PROPERTY_TYPES, describe } from './lib/model.mjs';
-import { CANVAS_ID, loadLocale } from './lib/store.mjs';
+import { CANVAS_ID, loadLocale, osLocale } from './lib/store.mjs';
 
 let session;
 const log = (message) => {
@@ -12,7 +12,7 @@ const charts = new Map();
 
 // Messages follow the chosen language; "auto" follows the OS until a page tells which language it uses.
 const savedLocale = await loadLocale();
-setLocale(savedLocale === 'auto' ? resolveLocale(Intl.DateTimeFormat().resolvedOptions().locale) : savedLocale);
+setLocale(savedLocale === 'auto' ? resolveLocale(osLocale()) : savedLocale);
 
 function toCanvasError(error) {
   if (error instanceof CanvasError) return error;

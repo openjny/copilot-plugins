@@ -2,6 +2,7 @@ import path from 'node:path';
 import { serializeDoc } from './format.mjs';
 import { t } from './i18n.mjs';
 import { ModelError, applyOps, emptyDoc, fail } from './model.mjs';
+import { revealInFolder } from './reveal.mjs';
 import { startServer } from './server.mjs';
 import { createChartFile, hashText, loadRecent, pathKey, readChartFile, rememberRecent, resolveChartPath, statStamp, withFileLock, writeAtomic } from './store.mjs';
 
@@ -20,9 +21,10 @@ export function historyLabel(ops) {
 
 /** One open panel: the chart file it shows, the page server, and the live state sent to the page. */
 export class Chart {
-  constructor({ baseDir, log = () => {} } = {}) {
+  constructor({ baseDir, log = () => {}, reveal = revealInFolder } = {}) {
     this.baseDir = baseDir;
     this.log = log;
+    this.revealFile = reveal;
     this.rev = 0;
     this.file = null;
     this.doc = null;
@@ -45,6 +47,17 @@ export class Chart {
 
   get url() {
     return this.server?.url;
+  }
+
+  /** Shows the open file in the system's file manager (the folder that holds it). */
+  async reveal() {
+    if (!this.file) fail('no_file', 'err.noFile');
+    try {
+      await this.revealFile(this.file);
+    } catch (error) {
+      this.log(`reveal failed: ${error.message}`);
+      fail('reveal_failed', 'err.revealFailed');
+    }
   }
 
   get title() {

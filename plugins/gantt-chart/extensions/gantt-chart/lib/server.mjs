@@ -4,7 +4,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { LOCALE_CHOICES, resolveLocale, setLocale, t } from './i18n.mjs';
 import { ModelError, fail } from './model.mjs';
-import { loadLocale, loadTheme, loadView, saveLocale, saveTheme, saveView } from './store.mjs';
+import { loadLocale, loadTheme, loadView, osLocale, saveLocale, saveTheme, saveView } from './store.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const JS = 'text/javascript; charset=utf-8';
@@ -80,7 +80,7 @@ export async function startServer(chart, { log }) {
         // Put the saved theme, language and view choices on <html> so the first paint already uses them.
         const [theme, locale, view] = await Promise.all([loadTheme(), loadLocale(), loadView()]);
         // The columns go on as JSON in a URL-encoded attribute, as the names of properties can hold any character.
-        const attrs = `data-theme="${theme}" data-locale="${locale}" data-list="${view.list ? 'open' : 'closed'}" data-labels="${view.labels ? 'on' : 'off'}" data-cols="${encodeURIComponent(JSON.stringify(view.cols))}"`;
+        const attrs = `data-theme="${theme}" data-locale="${locale}" data-os-locale="${osLocale()}" data-list="${view.list ? 'open' : 'closed'}" data-labels="${view.labels ? 'on' : 'off'}" data-cols="${encodeURIComponent(JSON.stringify(view.cols))}" data-panel-off="${encodeURIComponent(JSON.stringify(view.panelOff))}" data-status-off="${encodeURIComponent(JSON.stringify(view.statusOff))}"`;
         const html = (await fs.readFile(FILES['/'][0], 'utf8')).replace('<html ', `<html ${attrs} `);
         res.writeHead(200, { ...SECURITY_HEADERS, 'Content-Type': FILES['/'][1] });
         return res.end(html);
@@ -121,6 +121,10 @@ export async function startServer(chart, { log }) {
         chart.select(body.id ?? null, body.ids);
         return sendJson(res, 200, { ok: true });
       }
+      if (url.pathname === '/api/reveal') {
+        await chart.reveal();
+        return sendJson(res, 200, { ok: true });
+      }
       if (url.pathname === '/api/theme') {
         await saveTheme(body.theme);
         return sendJson(res, 200, { ok: true });
@@ -130,11 +134,11 @@ export async function startServer(chart, { log }) {
         return sendJson(res, 200, { ok: true });
       }
       if (url.pathname === '/api/locale') {
-        // `locale` is the choice ("auto" or a language); `resolved` is the language the page itself uses.
+        // `locale` is the choice ("auto" or a language); `resolved` is the language the page itself uses (the OS when it says nothing).
         // Messages that go back to the page and to the agent follow the same language.
         if (!LOCALE_CHOICES.includes(body.locale)) fail('invalid_request', 'err.badChoice', { name: 'locale', choices: LOCALE_CHOICES.join(' / ') });
         if ((await loadLocale()) !== body.locale) await saveLocale(body.locale);
-        setLocale(body.locale === 'auto' ? resolveLocale(body.resolved) : body.locale);
+        setLocale(body.locale === 'auto' ? resolveLocale(body.resolved ?? osLocale()) : body.locale);
         return sendJson(res, 200, { ok: true });
       }
     }

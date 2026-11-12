@@ -166,28 +166,38 @@ async function saveChoice(name, value, choices) {
   }
 }
 
+/** The language of the operating system (the page cannot tell it: a browser reports its own, which is often English). */
+export const osLocale = () => Intl.DateTimeFormat().resolvedOptions().locale;
+
 export const loadTheme = () => loadChoice('theme', THEMES);
 export const saveTheme = (theme) => saveChoice('theme', theme, THEMES);
 export const loadLocale = () => loadChoice('locale', LOCALE_PREFS);
 export const saveLocale = (locale) => saveChoice('locale', locale, LOCALE_PREFS);
 
-/** What the page shows besides the chart itself, as the user left it: the task names on the chart, the task list on the left, and which optional columns the list has (the name is always there). */
+/**
+ * What the page shows besides the chart itself, as the user left it: the task names on the chart, the task list on the
+ * left, which optional columns the list has (the name is always there), and which items of the detail panel and of the
+ * status bar are hidden. A property of the project has the key "p:" and its name, in each of these lists.
+ */
 export const VIEW_COLS = ['dur', 'res'];
-export const VIEW_DEFAULT = { labels: true, list: false, cols: [] };
-/** The column of a property the user added: "p:" and its name. */
-const PROPERTY_COL = /^p:[\s\S]{1,50}$/;
-const MAX_COLS = 40;
+export const PANEL_KEYS = ['progress', 'note', 'start', 'end', 'duration', 'milestone', 'due', 'resources', 'color', 'predecessors'];
+export const STATUS_KEYS = ['tasks', 'duration', 'progress', 'late', 'selected'];
+export const VIEW_DEFAULT = { labels: true, list: false, cols: [], panelOff: [], statusOff: [] };
+/** The keys a list of the view can hold besides the properties. */
+const FIXED_KEYS = { cols: VIEW_COLS, panelOff: PANEL_KEYS, statusOff: STATUS_KEYS };
+const PROPERTY_KEY = /^p:[\s\S]{1,50}$/;
+const MAX_KEYS = 60;
 
-const isCol = (key) => typeof key === 'string' && (VIEW_COLS.includes(key) || PROPERTY_COL.test(key));
-/** The column keys without repeats: the fixed columns in their order, then the properties in the order given. */
-const knownCols = (value) => [...VIEW_COLS.filter((key) => value.includes(key)), ...new Set(value.filter((key) => typeof key === 'string' && PROPERTY_COL.test(key)))].slice(0, MAX_COLS);
+const isKey = (fixed, key) => typeof key === 'string' && (fixed.includes(key) || PROPERTY_KEY.test(key));
+/** The keys without repeats: the fixed ones in their order, then the properties in the order given. */
+const knownKeys = (fixed, value) => [...fixed.filter((key) => value.includes(key)), ...new Set(value.filter((key) => typeof key === 'string' && PROPERTY_KEY.test(key)))].slice(0, MAX_KEYS);
 
 export async function loadView() {
   try {
     const saved = JSON.parse(await fs.readFile(prefFile('view'), 'utf8'));
     return Object.fromEntries(
       Object.entries(VIEW_DEFAULT).map(([key, fallback]) => {
-        if (Array.isArray(fallback)) return [key, Array.isArray(saved[key]) ? knownCols(saved[key]) : fallback];
+        if (Array.isArray(fallback)) return [key, Array.isArray(saved[key]) ? knownKeys(FIXED_KEYS[key], saved[key]) : fallback];
         return [key, typeof saved[key] === 'boolean' ? saved[key] : fallback];
       }),
     );
@@ -196,14 +206,24 @@ export async function loadView() {
   }
 }
 
-/** Saves the given switches (`labels`, `list`) and column list (`cols`); the ones left out keep their value. */
-export async function saveView(change) {
+let viewQueue = Promise.resolve();
+
+/** Saves the given switches (`labels`, `list`) and lists (`cols`, `panelOff`, `statusOff`); the ones left out keep their value. */
+export function saveView(change) {
+  // Requests that arrive together (a renamed property changes two lists) must not read the same file: one would overwrite the other.
+  const saved = viewQueue.then(() => writeView(change));
+  viewQueue = saved.catch(() => {});
+  return saved;
+}
+
+async function writeView(change) {
   const view = await loadView();
   for (const [key, value] of Object.entries(change ?? {})) {
     if (!(key in VIEW_DEFAULT)) fail('invalid_request', 'err.badChoice', { name: key, choices: Object.keys(VIEW_DEFAULT).join(' / ') });
-    if (key === 'cols') {
-      if (!Array.isArray(value) || value.length > MAX_COLS || value.some((item) => !isCol(item))) fail('invalid_request', 'err.badChoice', { name: key, choices: `${VIEW_COLS.join(' / ')} / p:<property name>` });
-      view.cols = knownCols(value);
+    if (key in FIXED_KEYS) {
+      const fixed = FIXED_KEYS[key];
+      if (!Array.isArray(value) || value.length > MAX_KEYS || value.some((item) => !isKey(fixed, item))) fail('invalid_request', 'err.badChoice', { name: key, choices: `${fixed.join(' / ')} / p:<property name>` });
+      view[key] = knownKeys(fixed, value);
     } else {
       if (typeof value !== 'boolean') fail('invalid_request', 'err.badChoice', { name: key, choices: 'true / false' });
       view[key] = value;

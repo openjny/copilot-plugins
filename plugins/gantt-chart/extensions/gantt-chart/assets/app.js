@@ -5,14 +5,15 @@ import { AGGREGATES, FIRST_DAY, PALETTE, PROPERTY_TYPES, WEEKDAYS, WEEK_STARTS, 
 // "standard" scale that the day / week / month buttons reset to.
 const ROW_STD = 28;
 const ROW_MIN = 22;
-const ROW_MAX = 40;
+// Zooming in stops at the standard scale of the day view (what the 日 button sets): bigger than that adds nothing.
+const ROW_MAX = ROW_STD;
 let ROW_H = ROW_STD;
 let BAR_H = ROW_STD - 10;
 const LINK_LEG = 14;
 const HEAD_H = 56;
 const PPD = { day: 48, week: 18, month: 5 };
 const PPD_MIN = 1.5;
-const PPD_MAX = 120;
+const PPD_MAX = PPD.day;
 const MIN_DAYS = { day: 35, week: 140, month: 365 };
 /** The unit that reads best at this scale: columns stay wide enough for their labels (the standard scales sit in the middle of each band). */
 const unitFor = (ppd) => (ppd >= 30 ? 'day' : ppd >= 9.5 ? 'week' : 'month');
@@ -51,6 +52,7 @@ const ICONS = {
   milestone: 'M12 3l9 9-9 9-9-9z',
   check: 'M5 12l5 5 9-10',
   chevron: 'M6 9l6 6 6-6',
+  folder: 'M3 6h6l2 2h10v11H3z',
 };
 // Columns of the task list. "#" and the name are always there; the others are the user's choice (kept with the view
 // settings): the duration, the assignee, and any property the project defines (key "p:<name>"). Each column has a
@@ -68,8 +70,9 @@ const PROP_COL_WIDTH = {
 };
 const COL_KEYS = Object.keys(COL_WIDTH);
 const OPTIONAL_COLS = ['dur', 'res'];
-const propCol = (prop) => `p:${prop.name}`;
-function readCols(text) {
+const propKey = (name) => `p:${name}`;
+const propCol = (prop) => propKey(prop.name);
+function readKeys(text) {
   try {
     const list = JSON.parse(decodeURIComponent(text ?? ''));
     return Array.isArray(list) ? list.filter((key) => typeof key === 'string') : [];
@@ -107,7 +110,10 @@ const app = {
   // Whether the chart shows the names of the tasks next to or on their bars.
   labels: document.documentElement.dataset.labels !== 'off',
   // The optional list columns that are shown: "dur", "res" and "p:<name>" for a property (the page gets them as JSON in a URL-encoded attribute).
-  cols: new Set(readCols(document.documentElement.dataset.cols)),
+  cols: new Set(readKeys(document.documentElement.dataset.cols)),
+  // The items of the detail panel and of the status bar that are hidden, as keys: the fixed ones (see panelItems, statusItems) and "p:<name>" for a property.
+  panelOff: new Set(readKeys(document.documentElement.dataset.panelOff)),
+  statusOff: new Set(readKeys(document.documentElement.dataset.statusOff)),
   detailOpen: false,
   moreOpen: false,
   editing: null,
@@ -126,6 +132,8 @@ const app = {
   menuCell: null,
   lastClick: null,
   pendingRender: false,
+  // A row of the list is being dragged to another place (see reorder).
+  rowDrag: false,
   saving: 'saved',
   colW: Object.fromEntries(COL_KEYS.map((key) => [key, COL_WIDTH[key].std])),
   // Height of the detail panel when the user has dragged it; null lets it fit its content.
@@ -155,7 +163,7 @@ const listW = () => COL_NO + (app.listOpen ? colKeys().reduce((sum, key) => sum 
 // ---- Language -----------------------------------------------------------------------------------------------------
 
 /** The language the page shows: the choice, or (for "auto") the browser's. */
-const resolvedLocale = () => (app.locale === 'auto' ? resolveLocale(navigator.language) : app.locale);
+const resolvedLocale = () => (app.locale === 'auto' ? resolveLocale(document.documentElement.dataset.osLocale || navigator.language) : app.locale);
 const colorName = (color) => t(`color.${color}`);
 
 /** Puts the chosen language on the page (the static texts, the title) and tells the server, whose messages follow it. */
@@ -378,7 +386,7 @@ async function request(path, body, done, onError) {
 /** Undo or redo the last change (the server keeps the history). */
 async function stepHistory(direction) {
   const wanted = app.state?.history?.[direction];
-  if (!wanted || app.drag) return;
+  if (!wanted || app.drag || app.rowDrag) return;
   await request(`/api/${direction}`, {}, (data) => {
     toast(t(direction === 'undo' ? 'toast.undone' : 'toast.redone', { label: historyName(data.label) }), 'info');
   });
@@ -422,7 +430,7 @@ function applyState(state) {
   if (app.selected && !taskById(app.selected)) app.selected = [...app.picked][0] ?? null;
   if (app.selected) app.picked.add(app.selected);
   if (app.selLink && !hasLink(app.selLink.from, app.selLink.to)) app.selLink = null;
-  if (app.drag) {
+  if (app.drag || app.rowDrag) {
     app.pendingRender = true;
     return;
   }
@@ -616,7 +624,6 @@ function renderTop() {
       'div',
       { class: 'ttl' },
       h('div', { class: 'tname' }, title, h('button', { id: 'project-settings', class: 'btn flat square', type: 'button', title: t('project.title'), 'aria-label': t('project.title'), onclick: openProject }, icon('sliders'))),
-      h('span', { class: 'file', title: file.path }, file.name),
     ),
     h('span', { class: 'spacer' }),
     h('span', { id: 'save', class: 'save', 'aria-live': 'polite' }),
@@ -1518,14 +1525,19 @@ function columnsMenu(at) {
   ]);
 }
 
-/** A property was renamed (`to` is its new name) or deleted (`to` is null): its column in the list follows, or goes. */
+/** A property was renamed (`to` is its new name) or deleted (`to` is null): what is chosen for it (its column, its place in the panel and in the status bar) follows, or goes. */
 function renameCol(from, to) {
-  const old = `p:${from}`;
-  if (!app.cols.has(old)) return;
-  app.cols.delete(old);
-  if (to !== null) app.cols.add(`p:${to}`);
-  rememberCols();
+  const old = propKey(from);
+  for (const [set, name] of [[app.cols, 'cols'], [app.panelOff, 'panelOff'], [app.statusOff, 'statusOff']]) {
+    if (!set.has(old)) continue;
+    set.delete(old);
+    if (to !== null) set.add(propKey(to));
+    rememberView({ [name]: [...set] });
+  }
   renderChart();
+  app.panelKey = '';
+  renderPanel();
+  renderStatus();
 }
 
 /** Tells the server which optional columns are chosen (it keeps them with the other view settings). */
@@ -2077,27 +2089,80 @@ function renderStatus() {
   if (!app.sched) return;
   const project = app.sched.project;
   const slash = (day) => formatDate(day).replaceAll('-', '/');
+  const shown = (key) => !app.statusOff.has(key);
+  const spans = [];
+  if (shown('tasks')) spans.push(h('span', {}, t('status.tasks', { value: project.count })));
   // The properties that add up are totalled for the whole project.
-  const totals = properties().filter((prop) => prop.aggregate).map((prop) => t('status.total', { name: prop.name, value: project.totals[prop.name] == null ? '-' : formatValue(prop, project.totals[prop.name]) }));
-  const parts = [
-    t('status.tasks', { value: project.count }),
-    ...totals,
-    t('status.duration', { value: project.count ? formatDuration(project.duration) : '-' }),
-    t('status.progress', { value: project.count ? `${project.progress.toFixed(2)}%` : '-' }),
-  ];
-  const figures = parts.length;
-  const row = selectedRow();
+  for (const prop of properties().filter((item) => item.aggregate && shown(propCol(item)))) {
+    spans.push(h('span', {}, t('status.total', { name: prop.name, value: project.totals[prop.name] == null ? '-' : formatValue(prop, project.totals[prop.name]) })));
+  }
+  if (shown('duration')) spans.push(h('span', {}, t('status.duration', { value: project.count ? formatDuration(project.duration) : '-' })));
+  if (shown('progress')) spans.push(h('span', {}, t('status.progress', { value: project.count ? `${project.progress.toFixed(2)}%` : '-' })));
+  // The count of late tasks sits right after the project figures, in red.
   const late = app.sched.rows.filter((item) => {
     const due = taskById(item.id)?.due;
     return due && item.endDay > parseDate(due);
   }).length;
-  if (app.selLink) parts.push(t('status.linkSelected'));
-  else if (app.picked.size > 1) parts.push(t('status.selectedMany', { count: app.picked.size }));
-  else if (row) parts.push(`${taskById(row.id).name}  ${slash(row.startDay)} – ${slash(row.endDay)} (${formatDuration(row.duration)})`);
-  const spans = parts.map((text) => h('span', {}, text));
-  // The count of late tasks sits right after the project figures, in red.
-  if (late) spans.splice(figures, 0, h('span', { class: 'late' }, t('status.late', { value: late })));
-  ui.status.replaceChildren(...spans);
+  if (late && shown('late')) spans.push(h('span', { class: 'late' }, t('status.late', { value: late })));
+  const row = selectedRow();
+  if (shown('selected')) {
+    if (app.selLink) spans.push(h('span', {}, t('status.linkSelected')));
+    else if (app.picked.size > 1) spans.push(h('span', {}, t('status.selectedMany', { count: app.picked.size })));
+    else if (row) spans.push(h('span', {}, `${taskById(row.id).name}  ${slash(row.startDay)} – ${slash(row.endDay)} (${formatDuration(row.duration)})`));
+  }
+  const button = h('button', { class: 'btn flat square status-menu', type: 'button', title: t('status.menu'), 'aria-label': t('status.menu'), 'aria-haspopup': 'menu', onclick: (event) => statusMenu(event.currentTarget) }, icon('sliders'));
+  ui.status.replaceChildren(...spans, button);
+}
+
+ui.status.addEventListener('contextmenu', (event) => statusMenu(event));
+
+/** The menu of the items of the status bar: each one is shown or hidden. */
+function statusMenu(at) {
+  const totals = properties().filter((prop) => prop.aggregate);
+  const item = (key, label) => ({ label, checked: !app.statusOff.has(key), run: () => toggleOff(app.statusOff, 'statusOff', key) });
+  showMenu(at, [
+    { heading: t('status.menu') },
+    item('tasks', t('status.item.tasks')),
+    ...totals.map((prop) => item(propCol(prop), prop.name)),
+    item('duration', t('status.item.duration')),
+    item('progress', t('status.item.progress')),
+    item('late', t('status.item.late')),
+    item('selected', t('status.item.selected')),
+  ]);
+}
+
+/** The menu of the items of the detail panel: each one is shown or hidden (the ones under "details" open with the button in the header). */
+function panelMenu(at) {
+  const item = (key, label) => ({ label, checked: !app.panelOff.has(key), run: () => toggleOff(app.panelOff, 'panelOff', key) });
+  showMenu(at, [
+    { heading: t('panel.fields') },
+    item('progress', t('panel.progress')),
+    ...properties().map((prop) => item(propCol(prop), prop.name)),
+    item('note', t('panel.note')),
+    { separator: true },
+    { heading: t('panel.moreGroup') },
+    item('start', t('panel.start')),
+    item('end', t('panel.end')),
+    item('duration', t('panel.item.duration')),
+    item('milestone', t('panel.item.milestone')),
+    item('due', t('panel.item.due')),
+    item('resources', t('panel.resources')),
+    item('color', t('tb.color')),
+    item('predecessors', t('panel.item.predecessors')),
+  ]);
+}
+
+
+/** Hides or shows an item of the panel or the status bar (`set` holds the hidden ones) and keeps the choice with the other view settings. */
+function toggleOff(set, name, key) {
+  if (!set.delete(key)) set.add(key);
+  rememberView({ [name]: [...set] });
+  if (name === 'panelOff') {
+    app.panelKey = '';
+    renderPanel();
+  } else {
+    renderStatus();
+  }
 }
 
 // ---- Dragging bars --------------------------------------------------------------------------------------------
@@ -2366,6 +2431,178 @@ ui.scroller.addEventListener(
     panned = false;
     event.preventDefault();
     event.stopPropagation();
+  },
+  true,
+);
+
+// ---- Reordering: grab a row of the list and drag it up or down -----------------------------------------------------
+
+const REORDER_SLOP = 5;
+const REORDER_EDGE = 36;
+let reorder = null;
+let reordered = false;
+
+/** The tasks that travel when the row `id` is grabbed: the whole selection when the row is part of it, else the row alone. A task goes with its children; a task under a selected parent is carried by that parent. */
+function reorderGroup(id) {
+  if (!(app.picked.size > 1 && app.picked.has(id))) return [id];
+  const list = tasks();
+  return list
+    .filter((task, i) => {
+      if (!app.picked.has(task.id)) return false;
+      for (let j = i - 1, level = task.level; j >= 0 && level > 0; j--) {
+        if (list[j].level >= level) continue;
+        if (app.picked.has(list[j].id)) return false;
+        level = list[j].level;
+      }
+      return true;
+    })
+    .map((task) => task.id);
+}
+
+/**
+ * Where a drop at the pointer would put the group, as the model's own answer: the ops, the place for the line that shows
+ * it (a y in the body and the level it will have), or null when the drop is not possible or changes nothing. The top half
+ * of a row means "before it", the bottom half "after it" (right under an open parent, it means its first child).
+ */
+function reorderTarget(group, clientY) {
+  const rows = app.visible;
+  if (!rows.length) return null;
+  const y = clientY - ui.bl.getBoundingClientRect().top;
+  const i = clamp(Math.floor(y / ROW_H), 0, rows.length - 1);
+  const row = rows[i];
+  const lower = y >= i * ROW_H + ROW_H / 2;
+  const list = tasks();
+  let where;
+  if (!lower) where = { before: row.id };
+  else if (row.summary && !list[row.index].collapsed) where = { before: list[row.index + 1].id };
+  else where = { after: row.id };
+  const ops = group.map((id, k) => ({ op: 'move', id, ...(k === 0 ? where : { after: group[k - 1] }) }));
+  const result = previewOps(ops);
+  if (!result || result.doc.tasks.map((task) => task.id).join() === list.map((task) => task.id).join()) return null;
+  const level = taskById(where.before ?? where.after).level;
+  return { ops, line: (lower ? i + 1 : i) * ROW_H, level, key: JSON.stringify(ops) };
+}
+
+/** Draws (or hides) the line that shows where the group would land, and tells the pointer what is being moved. */
+function reorderShow(event) {
+  if (!reorder?.started) return;
+  const target = reorderTarget(reorder.group, reorder.y);
+  reorder.target = target;
+  const [lineList, lineBody] = reorder.lines;
+  lineList.hidden = lineBody.hidden = !target;
+  if (target) {
+    lineList.style.top = lineBody.style.top = `${target.line - 1}px`;
+    lineList.style.left = `${app.listOpen ? COL_NO + 6 + target.level * 16 : COL_NO}px`;
+  }
+  ui.tip.hidden = false;
+  ui.tip.textContent = reorder.group.length > 1 ? t('reorder.many', { count: reorder.group.length }) : taskById(reorder.group[0])?.name ?? '';
+  const at = event ?? reorder.last;
+  ui.tip.style.left = `${at.clientX + 14}px`;
+  ui.tip.style.top = `${at.clientY + 16}px`;
+}
+
+function reorderTick() {
+  if (!reorder?.started) return;
+  const rect = ui.scroller.getBoundingClientRect();
+  const top = rect.top + HEAD_H + REORDER_EDGE;
+  const bottom = rect.bottom - REORDER_EDGE;
+  const dy = reorder.y < top ? -(top - reorder.y) / 4 : reorder.y > bottom ? (reorder.y - bottom) / 4 : 0;
+  if (dy) {
+    ui.scroller.scrollTop += clamp(Math.round(dy), -24, 24);
+    reorderShow();
+  }
+  reorder.frame = requestAnimationFrame(reorderTick);
+}
+
+function beginReorder(event) {
+  const { group } = reorder;
+  reorder.started = true;
+  reorder.last = event;
+  app.rowDrag = true;
+  hideMenu();
+  window.getSelection()?.removeAllRanges();
+  ui.bl.setPointerCapture(reorder.pointerId);
+  document.body.classList.add('reordering');
+  // The rows that travel (with their children) are dimmed in the list and in the chart.
+  const list = tasks();
+  const moving = new Set();
+  for (const id of group) {
+    const i = list.findIndex((task) => task.id === id);
+    for (let j = i; j < subtreeEnd(list, i); j++) moving.add(list[j].id);
+  }
+  for (const id of moving) for (const el of document.querySelectorAll(`[data-id="${id}"]`)) el.classList.add('reordering-row');
+  reorder.lines = [h('div', { class: 'drop-line', hidden: true }), h('div', { class: 'drop-line', hidden: true })];
+  ui.bl.append(reorder.lines[0]);
+  ui.bt.append(reorder.lines[1]);
+  reorder.frame = requestAnimationFrame(reorderTick);
+}
+
+function endReorder(event, { cancel = false } = {}) {
+  if (!reorder) return;
+  const r = reorder;
+  reorder = null;
+  if (!r.started) return;
+  cancelAnimationFrame(r.frame);
+  if (ui.bl.hasPointerCapture(r.pointerId)) ui.bl.releasePointerCapture(r.pointerId);
+  document.body.classList.remove('reordering');
+  for (const el of document.querySelectorAll('.reordering-row')) el.classList.remove('reordering-row');
+  for (const line of r.lines) line.remove();
+  ui.tip.hidden = true;
+  reordered = true;
+  const target = cancel ? null : reorderTarget(r.group, event?.clientY ?? r.y);
+  app.rowDrag = false;
+  if (target) {
+    send(target.ops).finally(() => {
+      if (app.pendingRender) {
+        app.pendingRender = false;
+        render();
+      }
+    });
+  } else if (app.pendingRender) {
+    app.pendingRender = false;
+    render();
+  }
+}
+
+ui.bl.addEventListener('pointerdown', (event) => {
+  reordered = false;
+  if (event.button !== 0 || app.editing || app.drag || app.link || app.marquee) return;
+  if (event.target.closest('button, input, textarea, select, a')) return;
+  const row = event.target.closest('.lrow');
+  if (!row) return;
+  reorder = { id: row.dataset.id, group: reorderGroup(row.dataset.id), pointerId: event.pointerId, x0: event.clientX, y0: event.clientY, y: event.clientY, started: false, target: null };
+});
+
+ui.bl.addEventListener('pointermove', (event) => {
+  if (!reorder || event.pointerId !== reorder.pointerId) return;
+  if (!(event.buttons & 1)) return endReorder(event, { cancel: true });
+  reorder.y = event.clientY;
+  reorder.last = event;
+  if (!reorder.started) {
+    if (Math.abs(event.clientY - reorder.y0) < REORDER_SLOP) return;
+    beginReorder(event);
+  }
+  reorderShow(event);
+});
+ui.bl.addEventListener('pointerup', (event) => event.button === 0 && endReorder(event));
+ui.bl.addEventListener('pointercancel', (event) => endReorder(event, { cancel: true }));
+// The click that follows a drag must not select a row.
+ui.bl.addEventListener(
+  'click',
+  (event) => {
+    if (!reordered) return;
+    reordered = false;
+    event.stopPropagation();
+    event.preventDefault();
+  },
+  true,
+);
+document.addEventListener(
+  'keydown',
+  (event) => {
+    if (event.key !== 'Escape' || !reorder?.started) return;
+    event.stopImmediatePropagation();
+    endReorder(null, { cancel: true });
   },
   true,
 );
@@ -2716,7 +2953,7 @@ function renderPanel() {
     ? JSON.stringify(['link', link.from, link.to, taskById(link.to).predecessors, rowById(link.from)?.endDay, rowById(link.to)?.startDay, brief])
     : several
       ? JSON.stringify(['several', [...app.picked], brief])
-      : JSON.stringify([taskById(row.id), row.startDay, row.endDay, row.duration, row.progress, row.summary, row.row, colorOf(row), brief, app.state.file.path, app.moreOpen, row.props, properties()]);
+      : JSON.stringify([taskById(row.id), row.startDay, row.endDay, row.duration, row.progress, row.summary, row.row, colorOf(row), brief, app.state.file.path, app.moreOpen, row.props, properties(), [...app.panelOff]]);
   if (key === app.panelKey) return;
   app.panelKey = key;
   // The list of suggestions belongs to a field of the panel that is about to be built again; one that stays keeps its list.
@@ -2745,8 +2982,12 @@ function renderPanel() {
   } else {
     const task = taskById(row.id);
     const { nameInput, quick, more } = taskForm(row);
-    const toggle = h('button', { class: 'btn more-btn', type: 'button', 'aria-expanded': String(app.moreOpen), title: t('panel.moreTitle'), onclick: toggleMore }, `${app.moreOpen ? '▾' : '▸'} ${t('panel.more')}`);
-    ui.panel.replaceChildren(h('div', { class: 'ph' }, h('span', { class: 'pno', title: task.name }, `#${row.row}`), nameInput, toggle, close), h('div', { class: 'pbody' }, quick, app.moreOpen ? more : null));
+    const toggle = more ? h('button', { class: 'btn more-btn', type: 'button', 'aria-expanded': String(app.moreOpen), title: t('panel.moreTitle'), onclick: toggleMore }, `${app.moreOpen ? '▾' : '▸'} ${t('panel.more')}`) : null;
+    const fields = h('button', { class: 'btn flat square', type: 'button', title: t('panel.fields'), 'aria-label': t('panel.fields'), 'aria-haspopup': 'menu', onclick: (event) => panelMenu(event.currentTarget) }, icon('sliders'));
+    ui.panel.replaceChildren(
+      h('div', { class: 'ph' }, h('span', { class: 'pno', title: task.name }, `#${row.row}`), nameInput, toggle, fields, close),
+      h('div', { class: 'pbody' }, quick, more && app.moreOpen ? more : null, quick || more ? null : h('p', { class: 'hint' }, t('panel.noFields'))),
+    );
     ui.panel.querySelector('.pbody').scrollTop = scrollTop;
   }
 
@@ -2815,6 +3056,26 @@ function linkForm(link) {
 ui.panel.addEventListener('keydown', (event) => {
   if (event.key === 'Escape') closeDetail();
 });
+
+/** Puts text on the clipboard. `host` is the element to borrow for the fallback: inside a modal dialog only its own content can take the focus. */
+async function copyText(text, host = document.body) {
+  try {
+    await navigator.clipboard.writeText(text);
+    return true;
+  } catch {
+    const area = h('textarea', { style: { position: 'fixed', opacity: '0', pointerEvents: 'none' }, 'aria-hidden': 'true', readonly: true }, text);
+    host.append(area);
+    area.select();
+    let ok = false;
+    try {
+      ok = document.execCommand('copy');
+    } catch {
+      ok = false;
+    }
+    area.remove();
+    return ok;
+  }
+}
 
 const labeled = (text, control, className) => h('label', className ? { class: className } : {}, text, control);
 
@@ -3167,39 +3428,37 @@ function taskForm(row) {
     'aria-label': t('panel.name'),
     onchange: (event) => (event.target.value.trim() ? commit({ name: event.target.value }) : revert(t('panel.errName'))),
   });
-  // What is entered day to day (progress, the project's properties, note) is always at hand; the rest opens with the button in the header.
-  const quick = h(
-    'div',
-    { class: 'quick form' },
-    h('div', { class: 'lbl' }, t('panel.progress'), h('div', { class: 'range' }, rangeInput, output)),
-    ...properties().map((prop, i) => propertyField(prop, i, row, task, commit, revert)),
-    labeled(t('panel.note'), h('textarea', { 'data-field': 'note', maxlength: '2000', onchange: (event) => commit({ note: event.target.value }) }, task.note), 'note'),
-    parent ? h('p', { class: 'hint note-hint' }, t('panel.parentHint')) : null,
-  );
+  // What the user chose to hide is left out. What is entered day to day (progress, the project's properties, note) is
+  // always at hand; the rest opens with the button in the header.
+  const on = (key) => !app.panelOff.has(key);
+  const quickItems = [
+    on('progress') ? h('div', { class: 'lbl progress' }, t('panel.progress'), h('div', { class: 'range' }, rangeInput, output)) : null,
+    ...properties().map((prop, i) => (on(propCol(prop)) ? propertyField(prop, i, row, task, commit, revert) : null)),
+    on('note') ? labeled(t('panel.note'), h('textarea', { 'data-field': 'note', maxlength: '2000', onchange: (event) => commit({ note: event.target.value }) }, task.note), 'note') : null,
+  ].filter(Boolean);
+  const quick = quickItems.length ? h('div', { class: 'quick form' }, ...quickItems, parent ? h('p', { class: 'hint note-hint' }, t('panel.parentHint')) : null) : null;
   const milestone = row.milestone;
-  const more = h(
-    'div',
-    { class: 'form more' },
-    h(
-      'div',
-      { class: 'pair wide' },
-      labeled(t('panel.start'), h('input', { type: 'date', value: formatDate(row.startDay), disabled: parent, 'data-field': 'start', onchange: (event) => (event.target.value ? commit({ start: event.target.value }) : revert(t('panel.errStart'))) })),
-      labeled(t('panel.end'), h('input', { type: 'date', value: formatDate(row.endDay), disabled: parent || milestone, 'data-field': 'end', onchange: (event) => (event.target.value ? commit({ end: event.target.value }) : revert(t('panel.errEnd'))) })),
-    ),
-    labeled(
-      t('panel.duration'),
-      h('input', {
-        type: 'text',
-        value: formatDuration(row.duration),
-        disabled: parent || milestone,
-        'data-field': 'duration',
-        onchange: (event) => (parseDuration(event.target.value) !== null ? commit({ duration: event.target.value }) : revert(t('panel.errDuration'))),
-      }),
-    ),
-    h('label', { class: 'check' }, h('input', { type: 'checkbox', checked: milestone, disabled: parent, 'data-field': 'milestone', onchange: (event) => commit({ milestone: event.target.checked }) }), t('panel.milestone')),
-    labeled(t('panel.due'), h('input', { type: 'date', value: task.due ?? '', 'data-field': 'due', onchange: (event) => commit({ due: event.target.value || null }) }), 'wide'),
-    h('div', { class: 'lbl wide' }, t('panel.resources'), tagInput({ values: task.resources, ariaLabel: t('panel.resources'), placeholder: t('tags.placeholder'), onChange: (resources) => commit({ resources }) })),
-    h(
+  const startField = on('start') ? labeled(t('panel.start'), h('input', { type: 'date', value: formatDate(row.startDay), disabled: parent, 'data-field': 'start', onchange: (event) => (event.target.value ? commit({ start: event.target.value }) : revert(t('panel.errStart'))) })) : null;
+  const endField = on('end') ? labeled(t('panel.end'), h('input', { type: 'date', value: formatDate(row.endDay), disabled: parent || milestone, 'data-field': 'end', onchange: (event) => (event.target.value ? commit({ end: event.target.value }) : revert(t('panel.errEnd'))) })) : null;
+  const moreItems = [
+    startField && endField ? h('div', { class: 'pair wide' }, startField, endField) : startField || endField,
+    on('duration')
+      ? labeled(
+          t('panel.duration'),
+          h('input', {
+            type: 'text',
+            value: formatDuration(row.duration),
+            disabled: parent || milestone,
+            'data-field': 'duration',
+            onchange: (event) => (parseDuration(event.target.value) !== null ? commit({ duration: event.target.value }) : revert(t('panel.errDuration'))),
+          }),
+        )
+      : null,
+    on('milestone') ? h('label', { class: 'check' }, h('input', { type: 'checkbox', checked: milestone, disabled: parent, 'data-field': 'milestone', onchange: (event) => commit({ milestone: event.target.checked }) }), t('panel.milestone')) : null,
+    on('due') ? labeled(t('panel.due'), h('input', { type: 'date', value: task.due ?? '', 'data-field': 'due', onchange: (event) => commit({ due: event.target.value || null }) }), 'wide') : null,
+    on('resources') ? h('div', { class: 'lbl wide' }, t('panel.resources'), tagInput({ values: task.resources, ariaLabel: t('panel.resources'), placeholder: t('tags.placeholder'), onChange: (resources) => commit({ resources }) })) : null,
+    on('color')
+      ? h(
       'div',
       { class: 'lbl wide' },
       t('tb.color'),
@@ -3209,9 +3468,11 @@ function taskForm(row) {
         : task.color === 'inherit' && row.parent >= 0
           ? h('span', {}, t('panel.colorInherited', { name: colorName(colorOf(row)) }))
           : null,
-    ),
-    parent ? null : h('div', { class: 'lbl wide' }, t('panel.predecessors'), ...predecessors, h('div', { class: 'pred-add' }, pick, lag, h('button', { class: 'btn', type: 'button', onclick: () => pick.value && commit({ predecessors: [...task.predecessors, { task: pick.value, lag: Math.trunc(Number(lag.value)) || 0 }] }) }, t('panel.predAdd')))),
-  );
+    )
+      : null,
+    parent || !on('predecessors') ? null : h('div', { class: 'lbl wide' }, t('panel.predecessors'), ...predecessors, h('div', { class: 'pred-add' }, pick, lag, h('button', { class: 'btn', type: 'button', onclick: () => pick.value && commit({ predecessors: [...task.predecessors, { task: pick.value, lag: Math.trunc(Number(lag.value)) || 0 }] }) }, t('panel.predAdd')))),
+  ].filter(Boolean);
+  const more = moreItems.length ? h('div', { class: 'form more' }, ...moreItems) : null;
   return { nameInput, quick, more };
 }
 
@@ -3304,6 +3565,37 @@ function openProject() {
     }
   });
   const addRow = h('div', { class: 'prop-add' }, addName, addType, h('button', { class: 'btn', type: 'button', onclick: addProp }, icon('plus'), t('props.add')));
+  // The path of the file in a box, with buttons to copy it and to open the folder that holds it.
+  const filePath = () => {
+    const path = app.state.file.path;
+    const copy = h('button', { class: 'btn flat square', type: 'button', title: t('project.copyPath'), 'aria-label': t('project.copyPath') }, icon('copy'));
+    copy.addEventListener('click', async () => {
+      error.hidden = true;
+      if (!(await copyText(path, ui.project))) {
+        error.textContent = t('project.copyFailed');
+        error.hidden = false;
+        return;
+      }
+      copy.replaceChildren(icon('check'));
+      copy.title = t('project.pathCopied');
+      clearTimeout(copy.timer);
+      copy.timer = setTimeout(() => {
+        copy.replaceChildren(icon('copy'));
+        copy.title = t('project.copyPath');
+      }, 1500);
+    });
+    const folder = h('button', { class: 'btn flat square', type: 'button', title: t('project.openFolder'), 'aria-label': t('project.openFolder') }, icon('folder'));
+    folder.addEventListener('click', async () => {
+      error.hidden = true;
+      try {
+        await post('/api/reveal', {});
+      } catch (failure) {
+        error.textContent = failure.message;
+        error.hidden = false;
+      }
+    });
+    return h('div', { class: 'path-box' }, h('span', { class: 'path', title: path }, path), copy, folder);
+  };
   // Shows what was saved (the server trims and sorts), or what is still saved when the edit was refused.
   const show = () => {
     const saved = app.state.doc.project;
@@ -3346,8 +3638,7 @@ function openProject() {
         labeled(t('project.extraWorkdays'), extraWorkdays),
         h('div', { class: 'lbl props-section' }, t('project.props'), h('p', { class: 'hint' }, t('props.hint')), propsBox, addRow),
         error,
-        h('p', { class: 'hint' }, t('project.hint')),
-        h('div', { class: 'lbl' }, t('project.file'), h('span', { class: 'path' }, app.state.file.path)),
+        h('div', { class: 'lbl' }, t('project.file'), filePath()),
       ),
     ),
   );

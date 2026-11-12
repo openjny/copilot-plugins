@@ -29,8 +29,8 @@ after(async () => {
   await rm(dir, { recursive: true, force: true });
 });
 
-const newChart = () => {
-  const chart = new Chart({ baseDir: dir });
+const newChart = (options = {}) => {
+  const chart = new Chart({ baseDir: dir, ...options });
   charts.push(chart);
   return chart;
 };
@@ -206,14 +206,41 @@ test('the chosen language is saved and put on the page, and the messages that co
   const failMessage = async () => (await (await fetch(`${chart.url}api/ops`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ops: [{ op: 'nope' }] }) })).json()).error.message;
 
   assert.equal(await locale(), 'auto');
+  // The page cannot know the language of the OS, so the server puts it on the page for the automatic choice.
+  assert.equal((await (await fetch(chart.url)).text()).match(/data-os-locale="([^"]+)"/)?.[1], Intl.DateTimeFormat().resolvedOptions().locale);
   assert.equal((await choose('ja')).status, 200);
   assert.equal(await locale(), 'ja');
   assert.match(await failMessage(), /未知の op/);
   assert.equal((await choose('auto', 'en-US')).status, 200);
   assert.equal(await locale(), 'auto');
   assert.match(await failMessage(), /Unknown op/);
+  // Without a language from the page, the automatic choice follows the OS.
+  assert.equal((await choose('ja')).status, 200);
+  assert.equal((await choose('auto')).status, 200);
+  assert.equal(/^ja/i.test(Intl.DateTimeFormat().resolvedOptions().locale), /未知の op/.test(await failMessage()));
   assert.equal((await choose('fr')).status, 400);
   assert.equal(await locale(), 'auto');
+});
+
+test('the folder of the open file is shown through the opener, and only for the open file', async () => {
+  const opened = [];
+  const chart = newChart({ reveal: async (file) => void opened.push(file) });
+  await chart.ensureServer();
+  const reveal = () => fetch(`${chart.url}api/reveal`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' });
+  assert.equal((await reveal()).status, 400, 'nothing is open yet');
+  await chart.openFile('reveal.gantt.json');
+  assert.equal((await reveal()).status, 200);
+  assert.deepEqual(opened, [path.join(dir, 'reveal.gantt.json')]);
+  // What the page sends is never used as a path.
+  await fetch(`${chart.url}api/reveal`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ path: 'C:\\\\Windows' }) });
+  assert.equal(opened.length, 2);
+  assert.equal(opened[1], opened[0]);
+  const failing = newChart({ reveal: async () => { throw new Error('no file manager'); } });
+  await failing.ensureServer();
+  await failing.openFile('reveal2.gantt.json');
+  const answer = await fetch(`${failing.url}api/reveal`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' });
+  assert.equal(answer.status, 400);
+  assert.equal((await answer.json()).error.code, 'reveal_failed');
 });
 
 test('the view choices (task names on the chart, task list, its columns) are saved one by one and put on the page', async () => {
@@ -245,4 +272,29 @@ test('the view choices (task names on the chart, task list, its columns) are sav
   assert.equal((await choose({ cols: ['name'] })).status, 400, 'the name is not a choice');
   assert.equal((await choose({ cols: 'dur' })).status, 400);
   assert.equal(await attrs(), 'closed,off,');
+
+  // The items hidden in the detail panel and in the status bar are kept the same way.
+  const hidden = async () => {
+    const html = await (await fetch(chart.url)).text();
+    const read = (name) => JSON.parse(decodeURIComponent(html.match(new RegExp(`data-${name}="([^"]*)"`))[1]));
+    return { panel: read('panel-off'), status: read('status-off') };
+  };
+  assert.deepEqual(await hidden(), { panel: [], status: [] }, 'everything is shown by default');
+  assert.equal((await choose({ panelOff: ['note', 'p:Hours', 'progress', 'note'], statusOff: ['late', 'tasks'] })).status, 200);
+  assert.deepEqual(await hidden(), { panel: ['progress', 'note', 'p:Hours'], status: ['tasks', 'late'] }, 'in their fixed order, without repeats');
+  assert.equal((await choose({ list: true })).status, 200);
+  assert.deepEqual((await hidden()).panel, ['progress', 'note', 'p:Hours'], 'a change of something else keeps them');
+  assert.equal((await choose({ panelOff: ['name'] })).status, 400, 'the name is not an item of the panel');
+  assert.equal((await choose({ statusOff: ['progress', 'estimate'] })).status, 400);
+  assert.equal((await choose({ statusOff: 'late' })).status, 400);
+  assert.deepEqual(await hidden(), { panel: ['progress', 'note', 'p:Hours'], status: ['tasks', 'late'] });
+  assert.equal((await choose({ panelOff: [], statusOff: [] })).status, 200);
+  assert.deepEqual(await hidden(), { panel: [], status: [] });
+
+  // Choices that arrive together (renaming a property changes several lists) must all be kept.
+  const together = await Promise.all([choose({ cols: ['p:Hours'] }), choose({ panelOff: ['p:Hours'] }), choose({ statusOff: ['p:Hours'] })]);
+  assert.deepEqual(together.map((response) => response.status), [200, 200, 200]);
+  assert.deepEqual(await hidden(), { panel: ['p:Hours'], status: ['p:Hours'] });
+  assert.equal(await attrs(), 'open,off,p:Hours');
+  assert.equal((await choose({ cols: [], panelOff: [], statusOff: [] })).status, 200);
 });
