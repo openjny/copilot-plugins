@@ -102,7 +102,7 @@ export function toTree(tasks) {
     if (!parent && task.milestone) node.milestone = true;
     if (!parent && task.effort !== null) node.effort = task.effort;
     if (task.resources.length) node.resources = task.resources;
-    if (task.color !== 'none') node.color = task.color;
+    if (task.color !== 'inherit') node.color = task.color;
     if (!parent && task.predecessors.length) node.predecessors = task.predecessors.map((pred) => (pred.lag ? { task: pred.task, lag: pred.lag } : { task: pred.task }));
     if (task.note) node.note = task.note;
     if (parent) {

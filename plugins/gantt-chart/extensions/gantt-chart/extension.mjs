@@ -75,7 +75,7 @@ const taskFields = {
   milestone: { type: 'boolean', description: 'true makes the task a milestone: a point in time shown as a diamond, one working day long. Not for a parent task.' },
   effort: { type: ['number', 'null'], description: 'Effort in hours; null clears it.' },
   resources: { type: 'array', items: { type: 'string' }, description: 'People or teams assigned.' },
-  color: { type: 'string', enum: COLORS, description: 'Color label of the bar. The color of a parent is the default for the tasks under it (a task left at "none" takes it), and setting a parent\'s color clears the colors of the tasks under it.' },
+  color: { type: 'string', enum: COLORS, description: 'Color label of the bar. "inherit" (the default) takes the color of the parent task, or blue when no parent has one; a color on a parent is the default for the tasks under it, and setting it clears the colors of the tasks under it.' },
   note: { type: 'string', description: 'Free-text memo.' },
   collapsed: { type: 'boolean', description: 'Collapse a parent task in the list.' },
   predecessors: {

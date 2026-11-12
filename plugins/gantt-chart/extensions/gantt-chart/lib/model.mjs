@@ -5,7 +5,9 @@ import { t } from './i18n.mjs';
 
 export const FORMAT = 'openjny-gantt-chart';
 export const VERSION = 2;
-export const COLORS = ['none', 'green', 'orange', 'red', 'purple', 'teal', 'gray'];
+/** The color labels. A task that has none of its own ("inherit") takes the color of its parent, and blue at the top. */
+export const PALETTE = ['blue', 'green', 'orange', 'red', 'purple', 'pink', 'gray'];
+export const COLORS = ['inherit', ...PALETTE];
 export const MAX_LEVEL = 8;
 export const MAX_VERSIONS = 100;
 export const MAX_TASKS = 2000;
@@ -205,7 +207,7 @@ export const blankTask = (id) => ({
   progress: 0,
   effort: null,
   resources: [],
-  color: 'none',
+  color: 'inherit',
   predecessors: [],
   note: '',
   collapsed: false,
@@ -520,7 +522,7 @@ function patchTask(d, i, patch, cal) {
   if (patch.milestone === true) task.duration = 1;
   // A parent's color is the default for the tasks under it, so setting it recolors the whole group.
   if (patch.color !== undefined && isSummary(d.tasks, i)) {
-    for (let j = i + 1, end = subtreeEnd(d.tasks, i); j < end; j++) d.tasks[j].color = 'none';
+    for (let j = i + 1, end = subtreeEnd(d.tasks, i); j < end; j++) d.tasks[j].color = 'inherit';
   }
   if (patch.predecessors !== undefined) {
     for (const pred of patch.predecessors) {

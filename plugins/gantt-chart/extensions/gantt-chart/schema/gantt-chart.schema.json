@@ -38,9 +38,8 @@
       "description": "YYYY-MM-DD, from 1970 to 2200."
     },
     "color": {
-      "enum": ["none", "green", "orange", "red", "purple", "teal", "gray"],
-      "default": "none",
-      "description": "Color label of the bar. A parent's color is the default for the tasks under it."
+      "enum": ["blue", "green", "orange", "red", "purple", "pink", "gray"],
+      "description": "Color label of the bar. Left out, the task takes the color of its parent, or blue when no parent has one. A parent's color is the default for the tasks under it."
     },
     "resources": {
       "type": "array",

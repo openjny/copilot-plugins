@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { SCHEMA, readDoc, serializeDoc, toTree } from '../lib/format.mjs';
 import { setLocale } from '../lib/i18n.mjs';
-import { MAX_DURATION, MAX_LAG, MAX_LEVEL, MAX_TASKS, MAX_VERSIONS, applyOps, describe, emptyDoc, finalize, formatDate, makeCalendar, maxSlideEarlier, parseDate, parseDuration, schedule } from '../lib/model.mjs';
+import { MAX_DURATION, MAX_LAG, MAX_LEVEL, MAX_TASKS, MAX_VERSIONS, PALETTE, applyOps, describe, emptyDoc, finalize, formatDate, makeCalendar, maxSlideEarlier, parseDate, parseDuration, schedule } from '../lib/model.mjs';
 
 setLocale('en');
 const NOW = new Date(2026, 10, 12, 9, 30);
@@ -142,13 +142,21 @@ test('slide rejects unknown tasks and bad days', () => {
 });
 
 test('setting the color of a parent clears the colors of the tasks under it', () => {
-  let doc = ops(sample(), [{ op: 'update', id: 'b', color: 'red' }, { op: 'update', id: 'e', color: 'teal' }]);
+  let doc = ops(sample(), [{ op: 'update', id: 'b', color: 'red' }, { op: 'update', id: 'e', color: 'pink' }]);
   doc = ops(doc, [{ op: 'update', id: 'a', color: 'green' }]);
   const by = Object.fromEntries(doc.tasks.map((task) => [task.id, task.color]));
-  assert.deepEqual([by.a, by.b, by.c, by.d], ['green', 'none', 'none', 'none']);
-  assert.equal(by.e, 'teal');
+  assert.deepEqual([by.a, by.b, by.c, by.d], ['green', 'inherit', 'inherit', 'inherit']);
+  assert.equal(by.e, 'pink');
   doc = ops(doc, [{ op: 'update', id: 'c', color: 'purple' }]);
   assert.equal(doc.tasks.find((task) => task.id === 'c').color, 'purple');
+});
+
+test('blue is a color of its own; only "inherit" is left out of the file', () => {
+  const doc = ops(sample(), [{ op: 'update', id: 'a', color: 'green' }, { op: 'update', id: 'b', color: 'blue' }]);
+  const saved = JSON.parse(serializeDoc(doc));
+  assert.equal(nodeOf(saved.tasks, 'b').color, 'blue');
+  assert.equal('color' in nodeOf(saved.tasks, 'c'), false);
+  assert.equal(readDoc(saved).tasks.find((task) => task.id === 'c').color, 'inherit');
 });
 
 test('an end date sets the duration in working days', () => {
@@ -243,7 +251,7 @@ test('the limits in the schema are the ones the model enforces', () => {
   assert.equal(SCHEMA.properties.versions.maxItems, MAX_VERSIONS);
   assert.equal(leaf.duration.maximum, MAX_DURATION);
   assert.equal(SCHEMA.$defs.dependency.properties.lag.maximum, MAX_LAG);
-  assert.deepEqual(SCHEMA.$defs.color.enum, ['none', 'green', 'orange', 'red', 'purple', 'teal', 'gray']);
+  assert.deepEqual(SCHEMA.$defs.color.enum, PALETTE);
   assert.equal(new RegExp(SCHEMA.$defs.id.pattern).test('a-B_9'), true);
   assert.equal(SCHEMA.properties.version.const, 2);
   assert.ok(MAX_LEVEL >= 8);
@@ -264,7 +272,7 @@ test('reading says where the file breaks the schema', () => {
   assert.throws(broken((raw) => delete nodeOf(raw.tasks, 'e').start), (error) => error.code === 'invalid_file' && /tasks\[1\] \(task e\) is missing "start"/.test(error.message));
   assert.throws(broken((raw) => (raw.tasks[0].start = '2026-11-16')), (error) => /tasks\[0\]\.start/.test(error.message) && /not allowed/.test(error.message));
   assert.throws(broken((raw) => (nodeOf(raw.tasks, 'e').duration = 0)), (error) => /duration/.test(error.message) && /at least 1/.test(error.message));
-  assert.throws(broken((raw) => (nodeOf(raw.tasks, 'e').color = 'pink')), (error) => /one of: none, green/.test(error.message));
+  assert.throws(broken((raw) => (nodeOf(raw.tasks, 'e').color = 'teal')), (error) => /one of: blue, green/.test(error.message));
   assert.throws(broken((raw) => (raw.tasks[0].children = [])), (error) => /at least 1 items/.test(error.message));
   assert.throws(broken((raw) => (nodeOf(raw.tasks, 'e').start = '2026-02-30')), (error) => /valid date/.test(error.message));
   // A milestone lasts one day.

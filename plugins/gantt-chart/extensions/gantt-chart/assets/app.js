@@ -1,5 +1,5 @@
 import { LOCALES, getLocale, resolveLocale, setLocale, t } from '/i18n.mjs';
-import { COLORS, FIRST_DAY, formatDate, formatDuration, isSummary, makeCalendar, maxSlideEarlier, mondayOnOrBefore, parseDate, parseDuration, schedule, subtreeEnd, todayDay, ymd } from '/model.mjs';
+import { FIRST_DAY, PALETTE, formatDate, formatDuration, isSummary, makeCalendar, maxSlideEarlier, mondayOnOrBefore, parseDate, parseDuration, schedule, subtreeEnd, todayDay, ymd } from '/model.mjs';
 
 // Row height and pixels per day change with Ctrl+scroll, so they are variables; the ROW_STD / PPD values are the
 // "standard" scale that the day / week / month buttons reset to.
@@ -229,13 +229,19 @@ const taskById = (id) => tasks().find((task) => task.id === id);
 const rowById = (id) => app.sched?.byId.get(id);
 const selectedRow = () => (app.selected ? rowById(app.selected) : undefined);
 
-/** The color a task is drawn in: its own, or else that of the nearest parent that has one. */
+/** The color a task is drawn in: its own, or else that of the nearest parent that has one, or else blue. */
 function colorOf(row) {
   for (let r = row; r; r = r.parent >= 0 ? app.sched.rows[r.parent] : null) {
     const color = taskById(r.id).color;
-    if (color !== 'none') return color;
+    if (color !== 'inherit') return color;
   }
-  return 'none';
+  return 'blue';
+}
+
+/** What the color controls show as chosen: the own color, or "inherit" for a task under a parent that has none of its own. */
+function chosenColor(row) {
+  const own = taskById(row.id).color;
+  return own === 'inherit' && row.parent < 0 ? colorOf(row) : own;
 }
 
 async function post(path, body) {
@@ -632,7 +638,7 @@ function renderBanner() {
 
 function buildToolbar() {
   const button = (id, name, label, onclick) => h('button', { id, class: 'btn square', type: 'button', 'aria-label': label, title: label, onclick }, icon(name));
-  const colorButton = h('button', { id: 'tb-color', class: 'btn colorbtn', type: 'button', 'aria-haspopup': 'menu', onclick: (event) => openColorMenu(event.currentTarget) }, h('i', { class: 'dot c-none' }), icon('chevron'));
+  const colorButton = h('button', { id: 'tb-color', class: 'btn colorbtn', type: 'button', 'aria-haspopup': 'menu', onclick: (event) => openColorMenu(event.currentTarget) }, h('i', { class: 'dot c-blue' }), icon('chevron'));
   ui.toolbar.replaceChildren(
     h(
       'button',
@@ -666,12 +672,17 @@ function buildToolbar() {
 function openColorMenu(anchor) {
   const ids = [...app.picked];
   if (!ids.length) return;
-  const current = taskById(app.selected ?? ids[0])?.color ?? 'none';
-  showMenu(
-    anchor,
-    COLORS.map((color) => ({ label: colorName(color), swatch: color, checked: color === current, run: () => setColor(ids, color) })),
-  );
+  const chosen = chosenColor(rowById(app.selected ?? ids[0]));
+  const inherit = inheritItem(ids, chosen);
+  showMenu(anchor, [
+    ...PALETTE.map((color) => ({ label: colorName(color), swatch: color, checked: color === chosen, run: () => setColor(ids, color) })),
+    ...(inherit ? [{ separator: true }, inherit] : []),
+  ]);
 }
+
+/** The "Same as parent" entry of a color menu, offered when a selected task has a parent to take the color from. */
+const inheritItem = (ids, chosen) =>
+  ids.some((id) => rowById(id)?.parent >= 0) ? { label: colorName('inherit'), checked: chosen === 'inherit', run: () => setColor(ids, 'inherit') } : null;
 
 const setColor = (ids, color) => send(ids.map((id) => ({ op: 'update', id, color })));
 
@@ -803,10 +814,10 @@ function renderToolbar() {
   set('tb-up', !can.up);
   set('tb-down', !can.down);
   const color = $('tb-color');
-  const own = taskById(app.selected)?.color ?? 'none';
+  const shown = selectedRow() ? colorOf(selectedRow()) : 'blue';
   color.disabled = app.picked.size === 0;
-  color.firstChild.className = `dot c-${own}`;
-  color.title = t('tb.colorWith', { name: colorName(own) });
+  color.firstChild.className = `dot c-${shown}`;
+  color.title = t('tb.colorWith', { name: colorName(shown) });
   color.setAttribute('aria-label', color.title);
   $('tb-list').setAttribute('aria-pressed', String(app.listOpen));
 }
@@ -979,13 +990,27 @@ function taskMenu(event, id) {
       { label: row.milestone ? t('ctx.makeTask') : t('ctx.makeMilestone'), icon: 'milestone', disabled: row.summary, run: () => send([{ op: 'update', id, milestone: !row.milestone }]) },
     );
   }
-  items.push({ separator: true }, { heading: t('tb.color') }, { swatches: COLORS, current: list[i].color, run: (color) => setColor(ids, color) }, { separator: true }, { label: several ? t('ctx.deleteMany', { count: ids.length }) : t('ctx.deleteOne'), icon: 'trash', hint: 'Del', danger: true, run: () => deleteTasks(ids) });
+  const chosen = chosenColor(row);
+  const inherit = inheritItem(ids, chosen);
+  items.push(
+    { separator: true },
+    { heading: t('tb.color') },
+    { swatches: PALETTE, current: chosen, run: (color) => setColor(ids, color) },
+    ...(inherit ? [inherit] : []),
+    { separator: true },
+    { label: several ? t('ctx.deleteMany', { count: ids.length }) : t('ctx.deleteOne'), icon: 'trash', hint: 'Del', danger: true, run: () => deleteTasks(ids) },
+  );
   showMenu(event, items);
 }
 
+/** The task whose row is under a pointer event in the chart body. */
+const rowUnder = (event) => app.visible[Math.floor((event.clientY - ui.bt.getBoundingClientRect().top) / ROW_H)];
+
+// Anywhere on the row of a task counts, not only its bar; the menu of an arrow (which shows its own) is left alone.
 ui.bt.addEventListener('contextmenu', (event) => {
-  const el = event.target.closest('.bar, .sbar');
-  if (el) taskMenu(event, el.dataset.id);
+  if (event.defaultPrevented) return;
+  const id = event.target.closest('.bar, .sbar')?.dataset.id ?? rowUnder(event)?.id;
+  if (id) taskMenu(event, id);
 });
 // Double-clicking the bar of a parent task folds or unfolds it: see isDoubleClick and endDrag.
 ui.bl.addEventListener('contextmenu', (event) => {
@@ -2571,10 +2596,10 @@ function taskForm(row) {
       'div',
       { class: 'lbl wide' },
       t('tb.color'),
-      h('div', { class: 'swatches', role: 'group', 'aria-label': t('tb.color') }, ...COLORS.map((color) => h('button', { class: `swatch c-${color}`, type: 'button', 'aria-pressed': String(task.color === color), onclick: () => commit({ color }) }, h('i'), colorName(color)))),
+      h('div', { class: 'swatches', role: 'group', 'aria-label': t('tb.color') }, ...PALETTE.map((color) => h('button', { class: `swatch c-${color}`, type: 'button', 'aria-pressed': String(chosenColor(row) === color), onclick: () => commit({ color }) }, h('i'), colorName(color))), row.parent >= 0 ? h('button', { class: 'swatch', type: 'button', 'aria-pressed': String(chosenColor(row) === 'inherit'), onclick: () => commit({ color: 'inherit' }) }, colorName('inherit')) : null),
       parent
         ? h('span', {}, t('panel.colorParent'))
-        : task.color === 'none' && colorOf(row) !== 'none'
+        : task.color === 'inherit' && row.parent >= 0
           ? h('span', {}, t('panel.colorInherited', { name: colorName(colorOf(row)) }))
           : null,
     ),
