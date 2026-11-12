@@ -23,7 +23,9 @@
 
 - 日程は「置かれた日（`start`）と、先行タスクが許す最初の日の、遅いほう」です。先行タスクは押すだけで、引っ張りません。`finalize` が計算結果を `start` に書き戻すので、短くしたり、つながりを消したりしても、タスクは動きません。この前提を変えるときは、`model.test.mjs` の「predecessors only push」のテストから直します。
 - 稼働日は、毎週の休み（`weeklyOff`。既定は土曜と日曜）の曜日と、`holidays` に入っている日を除いた日と、`extraWorkdays` に入れた日です（両方に入っている日は働く日です）。日付を決める関数はすべて `makeCalendar` の `isWorkday` を通します。週の始まり（`weekStart`）は表示だけで、休みの決め方には関わりません。画面の右クリックでの切り替え（`toggleWorkday`）は、曜日の決まりと違うときだけ、その日をどちらかのリストに入れます（`cal.isRegular` が、曜日だけで決まる状態です）。
-- ファイル形式は version 3 です（想定工数は `estimate`、実績工数は `actual`）。version 2 は `readDoc` が読み込み時に直します（`effort` を `estimate` に改名するだけ）。形式を変えるときは、読み込み側で古い version を直すか、`unsupported_version` にするかを決めて、テストに書きます。
+- ファイル形式は version 4 です。タスクの値は `props`（プロパティの名前をキーにした連想配列）に入り、プロジェクトが `properties` で定義を持ちます。工数のような項目は、組み込みではなくプロパティです（担当 `resources` だけは、組み込みのまま残しています）。version 2 と version 3 は `readDoc` が読み込み時に直します（`effort` → `estimate` → 数値のプロパティ「想定工数」と「実績工数」。使われていたものだけを作ります）。形式を変えるときは、読み込み側で古い version を直すか、`unsupported_version` にするかを決めて、テストに書きます。
+- プロパティの値の検査は `checkValue`（ひとつの値）と `checkProps`（タスク全体）にあり、`finalize`（編集のあと）と `readDoc`（読み込み）の両方が通ります。JSON Schema は値の中身を定義しません（名前が動的なため）。親タスクが合計などを出すプロパティ（`aggregate`）の値は、`finalize` が親から消し、`schedule` が `row.props` に子から計算して入れます。画面は、値を読むときは `row.props`、編集するときは `task.props` を使います。
+- 一覧の列のキーは、`name`、`dur`、`res`、プロパティの `p:<名前>` です。名前に引用符やカンマが入りうるので、CSS セレクターや HTML の属性に直接入れず（`data-cols` は JSON を URL エンコードしています）、要素は `dataset.key` で探します。プロパティの名前を変える・消すときは、`renameCol` が列を追従させます（`view.json` は画面全体で 1 つなので、別のファイルの同名のプロパティにも効きます）。
 - 日程が動く操作（つなぐ、期間を変える、右へ動かす）には、画面で事前の表示と「元に戻す」を付けます。`applyOps` が返す `shifted` と `dropped` を使い、画面は同じ関数で事前に計算します（`previewOps`）。
 - ja と en のキーは同じにします（`i18n.test.mjs` が確かめます）。数で文が変わるときは `key.one` と `key.other` を使いますが、ja は `other` しか選ばれません。名前を入れたい文は、1 件用と複数用（`key` と `keyMany`）に分けます。
 - ソースは `edit` ツールで直します。PowerShell の文字列置換は、バッククォートや `$` で壊れやすく、失敗しても何も書き込まれないことがあります。

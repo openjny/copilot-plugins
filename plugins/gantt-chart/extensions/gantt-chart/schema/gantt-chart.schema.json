@@ -1,15 +1,15 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://raw.githubusercontent.com/openjny/copilot-plugins/main/plugins/gantt-chart/extensions/gantt-chart/schema/gantt-chart.schema.json",
-  "title": "Gantt chart (openjny-gantt-chart, version 3)",
-  "description": "A Gantt chart: a tree of tasks with dates, dependencies and progress, plus saved versions. A parent task has \"children\" and takes its dates, progress and hours (estimate and actual) from them; a leaf task has \"start\" and \"duration\". Durations count working days (the weekly days off, Saturday and Sunday by default, and the project's holidays are off, unless the project works that day). Besides this schema, the program checks that ids are unique, that every predecessor exists, that no task is its own predecessor, and that the dependencies have no cycle. Version 2 files (which call the estimate \"effort\") are read as version 3.",
+  "title": "Gantt chart (openjny-gantt-chart, version 4)",
+  "description": "A Gantt chart: a tree of tasks with dates, dependencies and progress, plus saved versions. A parent task has \"children\" and takes its dates and progress from them; a leaf task has \"start\" and \"duration\". Durations count working days (the weekly days off, Saturday and Sunday by default, and the project's holidays are off, unless the project works that day). The project can define properties (extra fields such as hours, a category or a link): a task holds the values in \"props\", keyed by the name of the property. Besides this schema, the program checks that ids are unique, that every predecessor exists, that no task is its own predecessor, that the dependencies have no cycle, and that every value in \"props\" suits its property. Version 3 files (which had the fields \"estimate\" and \"actual\" on tasks) and version 2 files are read as version 4: the hours become number properties.",
   "type": "object",
   "required": ["format", "version", "project", "tasks"],
   "additionalProperties": false,
   "properties": {
     "$schema": { "type": "string", "description": "This schema's URL, so that editors can validate and complete the file." },
     "format": { "const": "openjny-gantt-chart" },
-    "version": { "const": 3, "description": "Version of this file format." },
+    "version": { "const": 4, "description": "Version of this file format." },
     "project": { "$ref": "#/$defs/project" },
     "tasks": {
       "type": "array",
@@ -49,6 +49,24 @@
       "items": { "type": "string", "minLength": 1, "maxLength": 50 }
     },
     "note": { "type": "string", "maxLength": 2000, "description": "Free-text memo." },
+    "propertyDefinition": {
+      "type": "object",
+      "required": ["name", "type"],
+      "additionalProperties": false,
+      "description": "A property the project adds to its tasks.",
+      "properties": {
+        "name": { "type": "string", "minLength": 1, "maxLength": 50, "description": "Unique in the project. It is the key of the values in a task's \"props\"." },
+        "type": { "enum": ["number", "text", "date", "select", "tags", "checkbox", "url"], "description": "What a value is: number (a number), text (up to 500 characters), date (YYYY-MM-DD), select (one of the options), tags (up to 20 words), checkbox (true, or left out), url (http or https)." },
+        "options": { "type": "array", "maxItems": 50, "uniqueItems": true, "items": { "type": "string", "minLength": 1, "maxLength": 50 }, "description": "The choices of a select property." },
+        "unit": { "type": "string", "maxLength": 10, "description": "Shown after the numbers of a number property (h, $...)." },
+        "aggregate": { "enum": ["sum", "avg", "min", "max"], "description": "For a number property: a parent task shows the sum (or the average, minimum, maximum) of the leaf tasks under it instead of a value of its own." }
+      }
+    },
+    "values": {
+      "type": "object",
+      "maxProperties": 20,
+      "description": "The values of the properties the task has, keyed by the name of the property: a number, a string, a date string, a string array (tags) or true (checkbox). What a task has no value for is left out. A parent holds no value for a property that adds up the tasks under it."
+    },
     "project": {
       "type": "object",
       "additionalProperties": false,
@@ -79,6 +97,12 @@
           "enum": ["mon", "sun"],
           "default": "mon",
           "description": "The day weeks start on in the timeline."
+        },
+        "properties": {
+          "type": "array",
+          "maxItems": 20,
+          "description": "The properties the project adds to its tasks, in the order they are shown. Leave it out when there are none.",
+          "items": { "$ref": "#/$defs/propertyDefinition" }
         }
       }
     },
@@ -110,9 +134,8 @@
         "duration": { "type": "integer", "minimum": 1, "maximum": 3650, "description": "Working days." },
         "progress": { "type": "integer", "minimum": 0, "maximum": 100, "default": 0, "description": "Percent complete." },
         "milestone": { "type": "boolean", "default": false, "description": "A point in time shown as a diamond; its duration is 1." },
-        "estimate": { "type": "number", "minimum": 0, "maximum": 1000000, "description": "Estimated effort in hours." },
-        "actual": { "type": "number", "minimum": 0, "maximum": 1000000, "description": "Actual effort in hours." },
         "resources": { "$ref": "#/$defs/resources" },
+        "props": { "$ref": "#/$defs/values" },
         "color": { "$ref": "#/$defs/color" },
         "predecessors": { "type": "array", "maxItems": 50, "items": { "$ref": "#/$defs/dependency" } },
         "due": { "$ref": "#/$defs/date", "description": "Deadline. The task is marked late when it ends after this day." },
@@ -130,6 +153,7 @@
         "name": { "$ref": "#/$defs/name" },
         "collapsed": { "type": "boolean", "default": false, "description": "Hide the children in the list." },
         "resources": { "$ref": "#/$defs/resources" },
+        "props": { "$ref": "#/$defs/values" },
         "color": { "$ref": "#/$defs/color" },
         "due": { "$ref": "#/$defs/date", "description": "Deadline. The parent is marked late when its last child ends after this day." },
         "note": { "$ref": "#/$defs/note" },

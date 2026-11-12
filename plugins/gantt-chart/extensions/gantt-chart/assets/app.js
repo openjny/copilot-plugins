@@ -1,5 +1,5 @@
 import { LOCALES, getLocale, resolveLocale, setLocale, t } from '/i18n.mjs';
-import { FIRST_DAY, PALETTE, WEEKDAYS, WEEK_STARTS, applyOps, formatDate, formatDuration, isSummary, makeCalendar, maxSlideEarlier, parseDate, parseDuration, schedule, subtreeEnd, todayDay, weekStartOnOrBefore, ymd } from '/model.mjs';
+import { AGGREGATES, FIRST_DAY, PALETTE, PROPERTY_TYPES, WEEKDAYS, WEEK_STARTS, applyOps, formatDate, formatDuration, isSummary, makeCalendar, maxSlideEarlier, parseDate, parseDuration, schedule, subtreeEnd, todayDay, weekStartOnOrBefore, ymd } from '/model.mjs';
 
 // Row height and pixels per day change with Ctrl+scroll, so they are variables; the ROW_STD / PPD values are the
 // "standard" scale that the day / week / month buttons reset to.
@@ -52,12 +52,31 @@ const ICONS = {
   check: 'M5 12l5 5 9-10',
   chevron: 'M6 9l6 6 6-6',
 };
-// Columns of the task list. "#" and the name are always there; the others (OPTIONAL_COLS) are the user's choice, kept
-// with the view settings. Each column has a width the user can drag.
+// Columns of the task list. "#" and the name are always there; the others are the user's choice (kept with the view
+// settings): the duration, the assignee, and any property the project defines (key "p:<name>"). Each column has a
+// width the user can drag.
 const COL_NO = 36;
 const COL_WIDTH = { name: { min: 120, max: 600, std: 240 }, dur: { min: 44, max: 140, std: 56 }, res: { min: 56, max: 320, std: 88 } };
+const PROP_COL_WIDTH = {
+  number: { min: 48, max: 200, std: 84 },
+  text: { min: 60, max: 400, std: 140 },
+  url: { min: 60, max: 400, std: 140 },
+  date: { min: 76, max: 160, std: 100 },
+  select: { min: 56, max: 240, std: 100 },
+  tags: { min: 56, max: 320, std: 120 },
+  checkbox: { min: 36, max: 120, std: 56 },
+};
 const COL_KEYS = Object.keys(COL_WIDTH);
 const OPTIONAL_COLS = ['dur', 'res'];
+const propCol = (prop) => `p:${prop.name}`;
+function readCols(text) {
+  try {
+    const list = JSON.parse(decodeURIComponent(text ?? ''));
+    return Array.isArray(list) ? list.filter((key) => typeof key === 'string') : [];
+  } catch {
+    return [];
+  }
+}
 // Room kept for the timeline when the columns are widened.
 const LIST_MARGIN = 160;
 // A list wider than this share of the canvas leaves too little of the chart: the first time it is shown, the name column gives way.
@@ -87,8 +106,8 @@ const app = {
   listFitted: false,
   // Whether the chart shows the names of the tasks next to or on their bars.
   labels: document.documentElement.dataset.labels !== 'off',
-  // The optional list columns that are shown (see OPTIONAL_COLS).
-  cols: new Set((document.documentElement.dataset.cols ?? '').split(',').filter((key) => OPTIONAL_COLS.includes(key))),
+  // The optional list columns that are shown: "dur", "res" and "p:<name>" for a property (the page gets them as JSON in a URL-encoded attribute).
+  cols: new Set(readCols(document.documentElement.dataset.cols)),
   detailOpen: false,
   moreOpen: false,
   editing: null,
@@ -99,6 +118,7 @@ const app = {
   suggestOwner: null,
   suggestPlace: null,
   tagDraft: '',
+  tagDraftField: '',
   titleRedraw: false,
   colDrag: null,
   // The header cell under the pointer (or whose menu is open), marked across the chart too.
@@ -118,12 +138,19 @@ const app = {
 
 const $ = (id) => document.getElementById(id);
 const ui = Object.fromEntries(['start', 'editor', 'topbar', 'toolbar', 'banner', 'scroller', 'grid', 'hl', 'ht', 'bl', 'bt', 'panel', 'psplit', 'splits', 'status', 'project', 'versions', 'confirm', 'toast', 'tip', 'today', 'fit', 'empty', 'ctx', 'suggest'].map((id) => [id, $(id)]));
-/** The columns of the list that are shown, left to right (the name, then the optional ones in their fixed order). */
+/** The properties the project defines, in the order they are shown. */
+const properties = () => app.state?.doc?.project?.properties ?? [];
+/** The property a column key ("p:<name>") stands for, if the project still has it. */
+const propOfCol = (key) => (key.startsWith('p:') ? properties().find((prop) => prop.name === key.slice(2)) : undefined);
+const colSpec = (key) => COL_WIDTH[key] ?? PROP_COL_WIDTH[propOfCol(key)?.type] ?? PROP_COL_WIDTH.text;
+const colWidth = (key) => app.colW[key] ?? colSpec(key).std;
+const colTitle = (key) => propOfCol(key)?.name ?? t(`col.${key}`);
+/** The columns of the list that are shown, left to right: the name, the duration and assignee (when chosen), then the chosen properties in their order. */
 function colKeys() {
-  return ['name', ...OPTIONAL_COLS.filter((key) => app.cols.has(key))];
+  return ['name', ...OPTIONAL_COLS.filter((key) => app.cols.has(key)), ...properties().filter((prop) => app.cols.has(propCol(prop))).map(propCol)];
 }
 /** Width of the task list in the scroller: the row numbers are always there, the rest (the name and the chosen columns) opens with the list. */
-const listW = () => COL_NO + (app.listOpen ? colKeys().reduce((sum, key) => sum + app.colW[key], 0) * app.listF : 0);
+const listW = () => COL_NO + (app.listOpen ? colKeys().reduce((sum, key) => sum + colWidth(key), 0) * app.listF : 0);
 
 // ---- Language -----------------------------------------------------------------------------------------------------
 
@@ -746,23 +773,27 @@ const setColor = (ids, color) => send(ids.map((id) => ({ op: 'update', id, color
 
 /** Sets the width of a list column, within its limits and so that the timeline keeps some room. */
 function setColWidth(key, width) {
-  const others = listW() - app.colW[key];
-  const room = Math.max(others + COL_WIDTH[key].min, ui.scroller.clientWidth - LIST_MARGIN);
-  app.colW[key] = Math.round(clamp(width, COL_WIDTH[key].min, Math.min(COL_WIDTH[key].max, room - others)));
+  const others = listW() - colWidth(key);
+  const room = Math.max(others + colSpec(key).min, ui.scroller.clientWidth - LIST_MARGIN);
+  const spec = colSpec(key);
+  app.colW[key] = Math.round(clamp(width, spec.min, Math.min(spec.max, room - others)));
 }
 
 /** Puts the column widths into the grid (the list is one sticky column of the grid; its rows share the same columns). */
 function applyCols() {
   ui.grid.style.setProperty('--leftW', `${listW()}px`);
-  ui.grid.style.setProperty('--cols', app.listOpen ? `${COL_NO}px ${colKeys().map((key) => `${app.colW[key] * app.listF}px`).join(' ')}` : `${COL_NO}px`);
+  ui.grid.style.setProperty('--cols', app.listOpen ? `${COL_NO}px ${colKeys().map((key) => `${colWidth(key) * app.listF}px`).join(' ')}` : `${COL_NO}px`);
 }
+
+/** The drag handle of a column (looked up by its key, which can hold any character). */
+const splitEl = (key) => [...ui.splits.children].find((el) => el.dataset.key === key);
 
 /** Moves the drag handles to the right edge of their columns. */
 function placeSplits() {
   let x = COL_NO;
   for (const key of colKeys()) {
-    x += app.colW[key];
-    const el = ui.splits.querySelector(`[data-key="${key}"]`);
+    x += colWidth(key);
+    const el = splitEl(key);
     if (el) el.style.left = `${x - 4}px`;
   }
 }
@@ -781,13 +812,13 @@ function renderSplits() {
   if (app.colDrag) return placeSplits();
   ui.splits.replaceChildren(
     ...colKeys().map((key) => {
-      const label = t('col.resize', { name: t(`col.${key}`) });
+      const label = t('col.resize', { name: colTitle(key) });
       const el = h('div', { class: 'split', role: 'separator', 'aria-orientation': 'vertical', tabindex: '0', 'data-key': key, title: label, 'aria-label': label });
       el.addEventListener('pointerdown', (event) => {
         if (event.button !== 0) return;
         event.preventDefault();
         el.setPointerCapture(event.pointerId);
-        app.colDrag = { key, x0: event.clientX, w0: app.colW[key], moved: false };
+        app.colDrag = { key, x0: event.clientX, w0: colWidth(key), moved: false };
         el.classList.add('dragging');
       });
       el.addEventListener('pointermove', (event) => {
@@ -803,7 +834,7 @@ function renderSplits() {
         const drag = app.colDrag;
         if (!drag) return;
         app.colDrag = null;
-        if (event.type === 'pointerup' && !drag.moved && isDoubleClick(event, `split:${key}`)) setColWidth(key, COL_WIDTH[key].std);
+        if (event.type === 'pointerup' && !drag.moved && isDoubleClick(event, `split:${key}`)) setColWidth(key, colSpec(key).std);
         renderChart();
       };
       el.addEventListener('pointerup', release);
@@ -811,9 +842,9 @@ function renderSplits() {
       el.addEventListener('keydown', (event) => {
         if (event.key !== 'ArrowLeft' && event.key !== 'ArrowRight') return;
         event.preventDefault();
-        setColWidth(key, app.colW[key] + (event.key === 'ArrowRight' ? 16 : -16));
+        setColWidth(key, colWidth(key) + (event.key === 'ArrowRight' ? 16 : -16));
         renderChart();
-        ui.splits.querySelector(`[data-key="${key}"]`)?.focus();
+        splitEl(key)?.focus();
       });
       return el;
     }),
@@ -825,7 +856,7 @@ function renderSplits() {
 function fitList() {
   if (app.listFitted || ui.scroller.clientWidth === 0) return;
   app.listFitted = true;
-  const over = COL_NO + colKeys().reduce((sum, key) => sum + app.colW[key], 0) - ui.scroller.clientWidth * LIST_SHARE;
+  const over = COL_NO + colKeys().reduce((sum, key) => sum + colWidth(key), 0) - ui.scroller.clientWidth * LIST_SHARE;
   if (over > 0) app.colW.name = Math.max(COL_WIDTH.name.min, app.colW.name - Math.ceil(over));
 }
 
@@ -1467,27 +1498,44 @@ function renderLeftHeader() {
     h('span', {}, t('col.name')),
     h('button', { class: 'btn flat square col-menu', type: 'button', title: t('col.menu'), 'aria-label': t('col.menu'), 'aria-haspopup': 'menu', onclick: (event) => columnsMenu(event.currentTarget) }, icon('sliders')),
   );
-  ui.hl.replaceChildren(h('div', { class: 'cols' }, cell('#', 'center'), name, ...colKeys().slice(1).map((key) => cell(t(`col.${key}`), key === 'dur' ? 'right' : undefined))));
+  ui.hl.replaceChildren(h('div', { class: 'cols' }, cell('#', 'center'), name, ...colKeys().slice(1).map((key) => cell(colTitle(key), key === 'dur' || propOfCol(key)?.type === 'number' ? 'right' : undefined))));
 }
 
 ui.hl.addEventListener('contextmenu', (event) => {
   if (app.listOpen) columnsMenu(event);
 });
 
-/** The menu of the columns of the list: the name is always there, the others are switched on and off. */
+/** The menu of the columns of the list: the name is always there, the others (duration, assignee, the properties) are switched on and off. */
 function columnsMenu(at) {
+  const props = properties();
   showMenu(at, [
     { heading: t('col.menu') },
     { label: t('col.name'), checked: true, disabled: true, run: () => {} },
     ...OPTIONAL_COLS.map((key) => ({ label: t(`col.${key}`), checked: app.cols.has(key), run: () => toggleCol(key) })),
+    ...(props.length ? [{ separator: true }, { heading: t('col.props') }, ...props.map((prop) => ({ label: prop.name, checked: app.cols.has(propCol(prop)), run: () => toggleCol(propCol(prop)) }))] : []),
+    { separator: true },
+    { label: t('col.manage'), icon: 'sliders', run: openProject },
   ]);
 }
+
+/** A property was renamed (`to` is its new name) or deleted (`to` is null): its column in the list follows, or goes. */
+function renameCol(from, to) {
+  const old = `p:${from}`;
+  if (!app.cols.has(old)) return;
+  app.cols.delete(old);
+  if (to !== null) app.cols.add(`p:${to}`);
+  rememberCols();
+  renderChart();
+}
+
+/** Tells the server which optional columns are chosen (it keeps them with the other view settings). */
+const rememberCols = () => rememberView({ cols: [...app.cols] });
 
 /** Shows or hides an optional column. The timeline keeps its place on the screen while the list gets wider or narrower. */
 function toggleCol(key) {
   const before = listW();
   if (!app.cols.delete(key)) app.cols.add(key);
-  rememberView({ cols: OPTIONAL_COLS.filter((item) => app.cols.has(item)) });
+  rememberCols();
   renderChart();
   ui.scroller.scrollLeft += listW() - before;
 }
@@ -1553,6 +1601,32 @@ function insertButton(where, row) {
   }, '+');
 }
 
+/** A number for the screen: at most two decimals, in the language of the page. */
+const numberText = (value) => new Intl.NumberFormat(getLocale(), { maximumFractionDigits: 2 }).format(value);
+
+/** The text a value of a property is shown as; '' for no value. */
+function formatValue(prop, value) {
+  if (value === null || value === undefined) return '';
+  switch (prop.type) {
+    case 'number':
+      return `${numberText(value)}${prop.unit ?? ''}`;
+    case 'tags':
+      return value.join(', ');
+    case 'checkbox':
+      return value ? '✓' : '';
+    default:
+      return String(value);
+  }
+}
+
+/** The cell of a property column: the value of the task, or what a parent worked out from the tasks under it. */
+function propCell(prop, row) {
+  const value = row.props[prop.name];
+  const text = formatValue(prop, value);
+  const link = prop.type === 'url' && value ? h('a', { href: value, target: '_blank', rel: 'noopener noreferrer', title: value, onclick: (event) => event.stopPropagation(), ondblclick: (event) => event.stopPropagation() }, text.replace(/^https?:\/\//i, '')) : null;
+  return h('div', { class: `c-prop pt-${prop.type}${row.summary && prop.aggregate ? ' derived' : ''}`, role: 'gridcell', title: link ? value : text }, link ?? text);
+}
+
 function leftRow(row) {
   const task = taskById(row.id);
   const selected = app.picked.has(row.id);
@@ -1601,6 +1675,7 @@ function leftRow(row) {
     app.listOpen ? h('div', { class: 'c-name', role: 'gridcell', style: { paddingLeft: `${6 + row.level * 16}px` } }, caret, name) : null,
     app.listOpen && app.cols.has('dur') ? h('div', { class: 'c-dur', role: 'gridcell' }, formatDuration(row.duration)) : null,
     app.listOpen && app.cols.has('res') ? h('div', { class: 'c-res', role: 'gridcell', title: resources }, resources) : null,
+    ...(app.listOpen ? colKeys().filter((key) => propOfCol(key)).map((key) => propCell(propOfCol(key), row)) : []),
   );
   return el;
 }
@@ -2002,13 +2077,15 @@ function renderStatus() {
   if (!app.sched) return;
   const project = app.sched.project;
   const slash = (day) => formatDate(day).replaceAll('-', '/');
+  // The properties that add up are totalled for the whole project.
+  const totals = properties().filter((prop) => prop.aggregate).map((prop) => t('status.total', { name: prop.name, value: project.totals[prop.name] == null ? '-' : formatValue(prop, project.totals[prop.name]) }));
   const parts = [
     t('status.tasks', { value: project.count }),
-    t('status.estimate', { value: project.estimate === null ? '-' : `${project.estimate}h` }),
-    t('status.actual', { value: project.actual === null ? '-' : `${project.actual}h` }),
+    ...totals,
     t('status.duration', { value: project.count ? formatDuration(project.duration) : '-' }),
     t('status.progress', { value: project.count ? `${project.progress.toFixed(2)}%` : '-' }),
   ];
+  const figures = parts.length;
   const row = selectedRow();
   const late = app.sched.rows.filter((item) => {
     const due = taskById(item.id)?.due;
@@ -2019,7 +2096,7 @@ function renderStatus() {
   else if (row) parts.push(`${taskById(row.id).name}  ${slash(row.startDay)} – ${slash(row.endDay)} (${formatDuration(row.duration)})`);
   const spans = parts.map((text) => h('span', {}, text));
   // The count of late tasks sits right after the project figures, in red.
-  if (late) spans.splice(5, 0, h('span', { class: 'late' }, t('status.late', { value: late })));
+  if (late) spans.splice(figures, 0, h('span', { class: 'late' }, t('status.late', { value: late })));
   ui.status.replaceChildren(...spans);
 }
 
@@ -2626,11 +2703,11 @@ function renderPanel() {
     applyPanelHeight();
     afterPanelToggle();
   }
-  hideSuggest();
   // The panel takes the color of the task it shows (the first of several), so that it reads as that task's.
   const shown = row ?? (several ? rowById([...app.picked][0]) : null);
   ui.panel.className = `panel${shown && !link ? ` tc-${colorOf(shown)}` : ''}`;
   if (!open) {
+    hideSuggest();
     app.panelKey = '';
     return;
   }
@@ -2639,9 +2716,11 @@ function renderPanel() {
     ? JSON.stringify(['link', link.from, link.to, taskById(link.to).predecessors, rowById(link.from)?.endDay, rowById(link.to)?.startDay, brief])
     : several
       ? JSON.stringify(['several', [...app.picked], brief])
-      : JSON.stringify([taskById(row.id), row.startDay, row.endDay, row.duration, row.progress, row.summary, row.row, colorOf(row), brief, app.state.file.path, app.moreOpen]);
+      : JSON.stringify([taskById(row.id), row.startDay, row.endDay, row.duration, row.progress, row.summary, row.row, colorOf(row), brief, app.state.file.path, app.moreOpen, row.props, properties()]);
   if (key === app.panelKey) return;
   app.panelKey = key;
+  // The list of suggestions belongs to a field of the panel that is about to be built again; one that stays keeps its list.
+  hideSuggest();
 
   const active = document.activeElement;
   const field = ui.panel.contains(active) ? active.getAttribute('data-field') : null;
@@ -2682,7 +2761,7 @@ function renderPanel() {
   updateBodyMin();
 }
 
-/** Shows or hides the less used fields (dates, assignee, color, predecessors) under the progress, effort and note. */
+/** Shows or hides the less used fields (dates, assignee, color, predecessors) under the progress, the properties and the note. */
 function toggleMore() {
   app.moreOpen = !app.moreOpen;
   app.panelKey = '';
@@ -2746,12 +2825,14 @@ const norm = (text) => text.normalize('NFKC').trim().toLowerCase();
 const MAX_TAGS = 20;
 const MAX_TAG_LENGTH = 50;
 
-/** Every assignee used in the chart with the number of tasks that use it, the most used first. */
-function knownResources() {
+/** Every word the tasks use in a list of tags (`pick` takes it from a task) with the number of tasks that use it, the most used first. */
+function knownTags(pick) {
   const counts = new Map();
-  for (const task of tasks()) for (const name of task.resources) counts.set(name, (counts.get(name) ?? 0) + 1);
+  for (const task of tasks()) for (const name of pick(task)) counts.set(name, (counts.get(name) ?? 0) + 1);
   return [...counts].map(([name, count]) => ({ name, count })).sort((a, b) => b.count - a.count || a.name.localeCompare(b.name, getLocale()));
 }
+/** Every assignee used in the chart. */
+const knownResources = () => knownTags((task) => task.resources);
 
 function hideSuggest() {
   ui.suggest.hidden = true;
@@ -2766,22 +2847,26 @@ function hideSuggest() {
  * takes the text as it is, Backspace on an empty field removes the last chip, and Esc closes the list.
  * `onChange(values)` is called after every change.
  */
-function tagInput({ values, ariaLabel, placeholder, onChange }) {
+function tagInput({ values, ariaLabel, placeholder, onChange, field = 'resources', known = knownResources }) {
   let tags = [...values];
   // What was being typed survives the redraw that follows a change (the panel is built again from the saved chart).
-  let query = app.tagDraft;
+  const setDraft = (text) => {
+    app.tagDraft = text;
+    app.tagDraftField = text ? field : '';
+  };
+  let query = app.tagDraftField === field ? app.tagDraft : '';
   let active = 0;
   let open = false;
   let list = [];
   const box = h('div', { class: 'tags' });
-  const input = h('input', { class: 'tag-input', 'data-field': 'resources', role: 'combobox', 'aria-expanded': 'false', 'aria-autocomplete': 'list', 'aria-controls': 'suggest', 'aria-label': ariaLabel, autocomplete: 'off', spellcheck: 'false', maxlength: String(MAX_TAG_LENGTH) });
+  const input = h('input', { class: 'tag-input', 'data-field': field, role: 'combobox', 'aria-expanded': 'false', 'aria-autocomplete': 'list', 'aria-controls': 'suggest', 'aria-label': ariaLabel, autocomplete: 'off', spellcheck: 'false', maxlength: String(MAX_TAG_LENGTH) });
   box.append(input);
   input.value = query;
 
   const options = () => {
     const q = norm(query);
     const taken = new Set(tags.map(norm));
-    const free = knownResources().filter((item) => !taken.has(norm(item.name)));
+    const free = known().filter((item) => !taken.has(norm(item.name)));
     const found = q ? free.filter((item) => norm(item.name).includes(q)).sort((a, b) => Number(norm(b.name).startsWith(q)) - Number(norm(a.name).startsWith(q))) : free;
     const rows = found.map((item) => ({ kind: 'existing', name: item.name, count: item.count }));
     // Nothing is offered to create when the text is already a chip or already exists.
@@ -2852,16 +2937,16 @@ function tagInput({ values, ariaLabel, placeholder, onChange }) {
 
   /** Adds names (ones that are already chips are skipped; one that exists keeps its spelling) and reports the change once. */
   const add = (names) => {
-    const known = knownResources();
+    const have = known();
     let changed = false;
     for (const raw of names) {
       const name = raw.trim().slice(0, MAX_TAG_LENGTH);
       if (!name || tags.length >= MAX_TAGS || tags.some((tag) => norm(tag) === norm(name))) continue;
-      tags = [...tags, known.find((item) => norm(item.name) === norm(name))?.name ?? name];
+      tags = [...tags, have.find((item) => norm(item.name) === norm(name))?.name ?? name];
       changed = true;
     }
     query = '';
-    app.tagDraft = '';
+    setDraft('');
     input.value = '';
     active = 0;
     paint();
@@ -2883,11 +2968,17 @@ function tagInput({ values, ariaLabel, placeholder, onChange }) {
     open = true;
     draw();
   });
+  // A click on a field that already has the focus (the panel gave it back after a redraw) opens the list as well.
+  input.addEventListener('click', () => {
+    if (app.suggestOwner === input) return;
+    open = true;
+    draw();
+  });
   input.addEventListener('blur', () => {
     // What was typed but not picked is dropped.
     open = false;
     query = '';
-    app.tagDraft = '';
+    setDraft('');
     input.value = '';
     if (app.suggestOwner === input) hideSuggest();
   });
@@ -2899,12 +2990,12 @@ function tagInput({ values, ariaLabel, placeholder, onChange }) {
       const rest = parts.pop();
       add(parts);
       query = rest;
-      app.tagDraft = rest;
+      setDraft(rest);
       input.value = rest;
       return draw();
     }
     query = input.value;
-    app.tagDraft = query;
+    setDraft(query);
     draw();
   });
   input.addEventListener('keydown', (event) => {
@@ -2952,6 +3043,68 @@ function tagInput({ values, ariaLabel, placeholder, onChange }) {
 // The list follows the field when the panel scrolls (focusing a field near the edge scrolls it into view).
 ui.panel.addEventListener('scroll', () => app.suggestPlace?.(), true);
 window.addEventListener('resize', hideSuggest);
+
+/** The control for one property in the detail panel. A parent shows, for a number that adds up, the figure from its children (and cannot change it). */
+function propertyField(prop, index, row, task, commit, revert) {
+  const field = `prop-${index}`;
+  const derived = row.summary && Boolean(prop.aggregate);
+  const value = derived ? row.props[prop.name] : task.props[prop.name];
+  const label = prop.unit ? `${prop.name} (${prop.unit})` : prop.name;
+  const title = derived ? t('props.fromChildren') : null;
+  const set = (next) => commit({ props: { [prop.name]: next } });
+  switch (prop.type) {
+    case 'number':
+      return labeled(
+        label,
+        h('input', {
+          type: 'number',
+          step: 'any',
+          value: value === null || value === undefined ? '' : String(value),
+          disabled: derived,
+          title,
+          'data-field': field,
+          onchange: (event) => {
+            const text = event.target.value.trim();
+            if (text === '') return set(null);
+            return Number.isFinite(Number(text)) ? set(Number(text)) : revert(t('panel.errNumber'));
+          },
+        }),
+      );
+    case 'text':
+      return labeled(label, h('input', { type: 'text', maxlength: '500', value: value ?? '', 'data-field': field, onchange: (event) => set(event.target.value.trim() ? event.target.value : null) }), 'wide');
+    case 'url':
+      return h(
+        'label',
+        { class: 'wide' },
+        h('span', {}, label, value ? h('a', { class: 'plink', href: value, target: '_blank', rel: 'noopener noreferrer', title: t('col.open') }, ' ↗') : null),
+        h('input', {
+          type: 'text',
+          maxlength: '2000',
+          placeholder: 'https://',
+          value: value ?? '',
+          'data-field': field,
+          onchange: (event) => {
+            const text = event.target.value.trim();
+            if (text === '') return set(null);
+            return /^https?:\/\/\S+$/i.test(text) ? set(text) : revert(t('panel.errUrl'));
+          },
+        }),
+      );
+    case 'date':
+      return labeled(label, h('input', { type: 'date', value: value ?? '', 'data-field': field, onchange: (event) => set(event.target.value || null) }));
+    case 'select':
+      return labeled(
+        label,
+        h('select', { 'data-field': field, onchange: (event) => set(event.target.value || null) }, h('option', { value: '' }, t('panel.selectNone')), ...prop.options.map((option) => h('option', { value: option, selected: option === value }, option))),
+      );
+    case 'tags':
+      return h('div', { class: 'lbl wide' }, label, tagInput({ values: value ?? [], ariaLabel: prop.name, placeholder: t('tags.placeholder'), onChange: set, field, known: () => knownTags((item) => item.props[prop.name] ?? []) }));
+    case 'checkbox':
+      return h('label', { class: 'check' }, h('input', { type: 'checkbox', checked: Boolean(value), 'data-field': field, onchange: (event) => set(event.target.checked ? true : null) }), prop.name);
+    default:
+      return null;
+  }
+}
 
 function taskForm(row) {
   const task = taskById(row.id);
@@ -3014,26 +3167,12 @@ function taskForm(row) {
     'aria-label': t('panel.name'),
     onchange: (event) => (event.target.value.trim() ? commit({ name: event.target.value }) : revert(t('panel.errName'))),
   });
-  // What is entered day to day (progress, hours, note) is always at hand; the rest opens with the button in the header.
-  const hours = (key, label) =>
-    labeled(
-      label,
-      h('input', {
-        type: 'number',
-        min: '0',
-        step: '0.5',
-        value: task[key] === null ? '' : String(task[key]),
-        disabled: parent,
-        'data-field': key,
-        onchange: (event) => (event.target.value === '' ? commit({ [key]: null }) : Number(event.target.value) >= 0 ? commit({ [key]: Number(event.target.value) }) : revert(t('panel.errEffort'))),
-      }),
-    );
+  // What is entered day to day (progress, the project's properties, note) is always at hand; the rest opens with the button in the header.
   const quick = h(
     'div',
     { class: 'quick form' },
     h('div', { class: 'lbl' }, t('panel.progress'), h('div', { class: 'range' }, rangeInput, output)),
-    hours('estimate', t('panel.estimate')),
-    hours('actual', t('panel.actual')),
+    ...properties().map((prop, i) => propertyField(prop, i, row, task, commit, revert)),
     labeled(t('panel.note'), h('textarea', { 'data-field': 'note', maxlength: '2000', onchange: (event) => commit({ note: event.target.value }) }, task.note), 'note'),
     parent ? h('p', { class: 'hint note-hint' }, t('panel.parentHint')) : null,
   );
@@ -3099,6 +3238,72 @@ function openProject() {
       }),
     );
   };
+  // The properties: a card for each (its name, its type, what its type has to set), and a row to add one.
+  const propsBox = h('div', { class: 'props' });
+  let drawn = '';
+  const propRow = (prop) => {
+    const nameInput = h('input', { type: 'text', maxlength: '50', value: prop.name, 'aria-label': t('props.nameAria'), 'data-field': 'prop-name' });
+    nameInput.addEventListener('change', async () => {
+      const next = nameInput.value.trim();
+      if (!next || next === prop.name) return show();
+      if (await run({ op: 'update_property', name: prop.name, newName: next })) renameCol(prop.name, next);
+    });
+    const del = h('button', { class: 'btn flat square danger', type: 'button', title: t('props.delete'), 'aria-label': t('props.deleteAria', { name: prop.name }) }, '×');
+    del.addEventListener('click', async () => {
+      const count = tasks().filter((task) => task.props[prop.name] !== undefined).length;
+      if (!(await confirmDialog(t('props.deleteConfirm', { name: prop.name, count }), t('props.delete')))) return;
+      if (await run({ op: 'delete_property', name: prop.name })) renameCol(prop.name, null);
+    });
+    const body = [];
+    const sync = [() => (nameInput.value = prop.name)];
+    if (prop.type === 'select') {
+      const options = h('textarea', { spellcheck: 'false', 'aria-label': t('props.options'), 'data-field': 'prop-options' });
+      options.addEventListener('change', () => run({ op: 'update_property', name: prop.name, options: options.value.split(/\r?\n/).map((line) => line.trim()).filter(Boolean) }));
+      sync.push(() => (options.value = (prop.options ?? []).join('\n')));
+      body.push(labeled(t('props.options'), options));
+    }
+    if (prop.type === 'number') {
+      const unit = h('input', { type: 'text', maxlength: '10', 'aria-label': t('props.unit'), 'data-field': 'prop-unit' });
+      unit.addEventListener('change', () => run({ op: 'update_property', name: prop.name, unit: unit.value.trim() || null }));
+      const aggregate = h('select', { 'aria-label': t('props.aggregate'), 'data-field': 'prop-aggregate' }, h('option', { value: '' }, t('props.agg.none')), ...AGGREGATES.map((kind) => h('option', { value: kind }, t(`props.agg.${kind}`))));
+      aggregate.addEventListener('change', () => run({ op: 'update_property', name: prop.name, aggregate: aggregate.value || null }));
+      sync.push(() => (unit.value = prop.unit ?? ''), () => (aggregate.value = prop.aggregate ?? ''));
+      body.push(labeled(t('props.unit'), unit), labeled(t('props.aggregate'), aggregate));
+    }
+    const el = h('div', { class: 'prop-row' }, h('div', { class: 'prop-head' }, nameInput, h('span', { class: 'prop-type' }, t(`props.type.${prop.type}`)), del), body.length ? h('div', { class: 'prop-body' }, ...body) : null);
+    el.sync = (saved) => {
+      for (const key of Object.keys(prop)) delete prop[key];
+      Object.assign(prop, saved);
+      for (const fn of sync) fn();
+    };
+    return el;
+  };
+  const drawProps = () => {
+    const list = properties();
+    const shape = JSON.stringify(list.map((prop) => [prop.name, prop.type]));
+    if (shape === drawn) return [...propsBox.querySelectorAll('.prop-row')].forEach((el, i) => el.sync(list[i]));
+    drawn = shape;
+    propsBox.replaceChildren(...(list.length ? list.map((prop) => propRow({ ...prop })) : [h('p', { class: 'hint' }, t('props.empty'))]));
+    [...propsBox.querySelectorAll('.prop-row')].forEach((el, i) => el.sync(list[i]));
+  };
+  const addName = h('input', { type: 'text', maxlength: '50', placeholder: t('props.addName'), 'aria-label': t('props.addName'), 'data-field': 'prop-add-name' });
+  const addType = h('select', { 'aria-label': t('props.typeAria'), 'data-field': 'prop-add-type' }, ...PROPERTY_TYPES.map((type) => h('option', { value: type }, t(`props.type.${type}`))));
+  const addProp = async () => {
+    const wanted = addName.value.trim();
+    if (!wanted) {
+      error.textContent = t('props.errName');
+      error.hidden = false;
+      return;
+    }
+    if (await run({ op: 'add_property', name: wanted, type: addType.value })) addName.value = '';
+  };
+  addName.addEventListener('keydown', (event) => {
+    if (event.key === 'Enter') {
+      event.preventDefault();
+      addProp();
+    }
+  });
+  const addRow = h('div', { class: 'prop-add' }, addName, addType, h('button', { class: 'btn', type: 'button', onclick: addProp }, icon('plus'), t('props.add')));
   // Shows what was saved (the server trims and sorts), or what is still saved when the edit was refused.
   const show = () => {
     const saved = app.state.doc.project;
@@ -3107,21 +3312,25 @@ function openProject() {
     holidays.value = saved.holidays.join('\n');
     extraWorkdays.value = saved.extraWorkdays.join('\n');
     drawWeekdays(saved);
+    drawProps();
   };
-  const save = async (op) => {
+  const run = async (op) => {
     error.hidden = true;
-    await send([{ op: 'project', ...op }], (message) => {
+    const result = await send([op], (message) => {
       error.textContent = message;
       error.hidden = false;
     });
     show();
+    return result;
   };
+  const save = (op) => run({ op: 'project', ...op });
   const dates = (field) => field.value.split(/[\s,]+/).filter(Boolean);
   name.addEventListener('change', () => save({ name: name.value }));
   weekStart.addEventListener('change', () => save({ weekStart: weekStart.value }));
   holidays.addEventListener('change', () => save({ holidays: dates(holidays) }));
   extraWorkdays.addEventListener('change', () => save({ extraWorkdays: dates(extraWorkdays) }));
   drawWeekdays(project);
+  drawProps();
   ui.project.replaceChildren(
     h('div', { class: 'dh' }, h('span', { id: 'project-title' }, t('project.title')), h('button', { class: 'btn flat square', type: 'button', 'aria-label': t('dlg.close'), onclick: () => ui.project.close() }, '×')),
     h(
@@ -3135,6 +3344,7 @@ function openProject() {
         h('div', { class: 'lbl' }, t('project.weeklyOff'), weekdays),
         labeled(t('project.holidays'), holidays),
         labeled(t('project.extraWorkdays'), extraWorkdays),
+        h('div', { class: 'lbl props-section' }, t('project.props'), h('p', { class: 'hint' }, t('props.hint')), propsBox, addRow),
         error,
         h('p', { class: 'hint' }, t('project.hint')),
         h('div', { class: 'lbl' }, t('project.file'), h('span', { class: 'path' }, app.state.file.path)),

@@ -220,7 +220,10 @@ test('the view choices (task names on the chart, task list, its columns) are sav
   const chart = newChart();
   await chart.ensureServer();
   await chart.openFile('view.gantt.json');
-  const attrs = async () => (await (await fetch(chart.url)).text()).match(/data-list="(\w+)" data-labels="(\w+)" data-cols="([\w,]*)"/)?.slice(1).join(',');
+  const attrs = async () => {
+    const match = (await (await fetch(chart.url)).text()).match(/data-list="(\w+)" data-labels="(\w+)" data-cols="([^"]*)"/);
+    return [match[1], match[2], JSON.parse(decodeURIComponent(match[3])).join('|')].join(',');
+  };
   const choose = (body) => fetch(`${chart.url}api/view`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
 
   assert.equal(await attrs(), 'closed,on,', 'the name is the only column by default');
@@ -229,11 +232,14 @@ test('the view choices (task names on the chart, task list, its columns) are sav
   assert.equal((await choose({ labels: false })).status, 200);
   assert.equal(await attrs(), 'open,off,');
   assert.equal((await choose({ cols: ['res', 'dur', 'res'] })).status, 200);
-  assert.equal(await attrs(), 'open,off,dur,res', 'in their fixed order, without repeats');
+  assert.equal(await attrs(), 'open,off,dur|res', 'in their fixed order, without repeats');
   assert.equal((await choose({ list: false })).status, 200);
-  assert.equal(await attrs(), 'closed,off,dur,res', 'the columns are kept when the list is folded');
+  assert.equal(await attrs(), 'closed,off,dur|res', 'the columns are kept when the list is folded');
+  assert.equal((await choose({ cols: ['p:Hours', 'res', 'p:Hours', 'p:a,b "c"'] })).status, 200);
+  assert.equal(await attrs(), 'closed,off,res|p:Hours|p:a,b "c"', 'the properties come after the fixed columns, and any character is safe in a name');
   assert.equal((await choose({ cols: [] })).status, 200);
   assert.equal(await attrs(), 'closed,off,');
+  assert.equal((await choose({ cols: ['p:'] })).status, 400, 'a property column needs a name');
   assert.equal((await choose({ list: 'yes' })).status, 400);
   assert.equal((await choose({ zoom: true })).status, 400);
   assert.equal((await choose({ cols: ['name'] })).status, 400, 'the name is not a choice');

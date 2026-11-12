@@ -6,7 +6,7 @@
 
 import { readFileSync } from 'node:fs';
 import { t } from './i18n.mjs';
-import { DEFAULT_WEEKLY_OFF, FORMAT, MAX_LEVEL, VERSION, blankTask, checkTasks, fail, finalize, isSummary, parseDate, sortWeekdays } from './model.mjs';
+import { DEFAULT_WEEKLY_OFF, FORMAT, MAX_LEVEL, ModelError, VERSION, blankTask, checkProperties, checkTasks, fail, finalize, isSummary, parseDate, sortWeekdays } from './model.mjs';
 import { validate } from './validate.mjs';
 
 export const SCHEMA = JSON.parse(readFileSync(new URL('../schema/gantt-chart.schema.json', import.meta.url), 'utf8'));
@@ -44,8 +44,7 @@ function flatten(nodes, level, out, where, ids) {
     if (node.duration !== undefined) task.duration = node.duration;
     if (node.progress !== undefined) task.progress = node.progress;
     if (node.milestone !== undefined) task.milestone = node.milestone;
-    if (node.estimate !== undefined) task.estimate = node.estimate;
-    if (node.actual !== undefined) task.actual = node.actual;
+    if (node.props !== undefined) task.props = { ...node.props };
     if (node.resources !== undefined) task.resources = node.resources;
     if (node.color !== undefined) task.color = node.color;
     if (node.note !== undefined) task.note = node.note;
@@ -65,24 +64,36 @@ function flatten(nodes, level, out, where, ids) {
   return out;
 }
 
-const readProject = (raw) => ({
+/** The definitions of the properties, checked beyond what the schema says (names differ, a select has its options...). */
+function readProperties(list, where) {
+  try {
+    return checkProperties(list ?? [], where);
+  } catch (error) {
+    if (error instanceof ModelError) error.code = 'invalid_file';
+    throw error;
+  }
+}
+
+const readProject = (raw, where = 'project') => ({
   name: (raw.name ?? '').trim(),
   weeklyOff: sortWeekdays(raw.weeklyOff ?? DEFAULT_WEEKLY_OFF),
   holidays: [...(raw.holidays ?? [])].sort(),
   extraWorkdays: [...(raw.extraWorkdays ?? [])].sort(),
   weekStart: raw.weekStart ?? 'mon',
+  properties: readProperties(raw.properties, `${where}.properties`),
 });
 
-/** The project as the file holds it: what is still at its default (Saturday and Sunday off, no extra workdays, weeks starting on Monday) is left out. */
+/** The project as the file holds it: what is still at its default (Saturday and Sunday off, no extra workdays, weeks starting on Monday, no properties) is left out. */
 const projectNode = (project) => ({
   name: project.name,
   ...(project.weeklyOff.join() !== DEFAULT_WEEKLY_OFF.join() && { weeklyOff: project.weeklyOff }),
   holidays: project.holidays,
   ...(project.extraWorkdays.length && { extraWorkdays: project.extraWorkdays }),
   ...(project.weekStart !== 'mon' && { weekStart: project.weekStart }),
+  ...(project.properties.length && { properties: project.properties }),
 });
 
-/** A version 2 file differs only in naming its hours "effort" (now "estimate", with "actual" next to it): read it as the current version. */
+/** A version 2 file differs only in naming its hours "effort" (now "estimate", with "actual" next to it): read it as version 3. */
 function upgradeV2(raw) {
   const rename = (nodes) => {
     for (const node of Array.isArray(nodes) ? nodes : []) {
@@ -95,6 +106,38 @@ function upgradeV2(raw) {
   };
   rename(raw.tasks);
   for (const version of Array.isArray(raw.versions) ? raw.versions : []) if (isObject(version)) rename(version.tasks);
+  raw.version = 3;
+}
+
+/**
+ * A version 3 file kept the estimated and the actual hours as fields of every task. They are now properties the
+ * project defines like any other, so they become number properties (in hours, adding up under a parent), and only
+ * where the file used them: the project and every saved version get their own.
+ */
+function upgradeV3(raw) {
+  const lift = (project, nodes) => {
+    if (!isObject(project)) return;
+    const wanted = [['estimate', t('prop.estimate')], ['actual', t('prop.actual')]];
+    const used = new Set();
+    const walk = (list) => {
+      for (const node of Array.isArray(list) ? list : []) {
+        if (!isObject(node)) continue;
+        for (const [key, name] of wanted) {
+          if (node[key] === undefined) continue;
+          if (node[key] !== null) node.props = { ...node.props, [name]: node[key] };
+          used.add(key);
+          delete node[key];
+        }
+        walk(node.children);
+      }
+    };
+    walk(nodes);
+    const properties = Array.isArray(project.properties) ? project.properties : [];
+    for (const [key, name] of wanted) if (used.has(key) && !properties.some((prop) => prop?.name === name)) properties.push({ name, type: 'number', unit: 'h', aggregate: 'sum' });
+    if (properties.length) project.properties = properties;
+  };
+  lift(raw.project, raw.tasks);
+  for (const version of Array.isArray(raw.versions) ? raw.versions : []) if (isObject(version)) lift(version.project, version.tasks);
   raw.version = VERSION;
 }
 
@@ -103,30 +146,33 @@ export function readDoc(raw) {
   if (!isObject(raw)) fail('invalid_file', 'err.file.notObject');
   if (raw.format !== FORMAT) fail('invalid_file', 'err.file.notChart', { format: FORMAT });
   if (raw.version === 2) upgradeV2(raw);
+  if (raw.version === 3) upgradeV3(raw);
   if (raw.version !== VERSION) fail('unsupported_version', 'err.file.version', { version: JSON.stringify(raw.version), supported: VERSION });
   const result = validate(SCHEMA, raw, { formats: FORMATS });
   if (result.errors.length) fail('invalid_file', 'err.file.schema', { details: describeErrors(result) });
 
+  const project = readProject(raw.project);
   const tasks = flatten(raw.tasks, 0, [], 'tasks', new Set());
-  checkTasks(tasks, 'tasks', 'invalid_file');
+  checkTasks(tasks, 'tasks', 'invalid_file', project.properties);
   const versionIds = new Set();
   const versions = (raw.versions ?? []).map((item, i) => {
     const where = `versions[${i}]`;
     if (versionIds.has(item.id)) fail('invalid_file', 'err.file.dupId', { where, id: item.id });
     versionIds.add(item.id);
+    const saved = readProject(item.project, `${where}.project`);
     const flat = flatten(item.tasks, 0, [], `${where}.tasks`, new Set());
-    checkTasks(flat, `${where}.tasks`, 'invalid_file');
-    return { id: item.id, name: item.name, createdAt: item.createdAt, project: readProject(item.project), tasks: flat };
+    checkTasks(flat, `${where}.tasks`, 'invalid_file', saved.properties);
+    return { id: item.id, name: item.name, createdAt: item.createdAt, project: saved, tasks: flat };
   });
-  const doc = { format: FORMAT, version: VERSION, project: readProject(raw.project), tasks, versions };
+  const doc = { format: FORMAT, version: VERSION, project, tasks, versions };
   finalize(doc, 'invalid_file');
   return doc;
 }
 
 // ---- Writing ---------------------------------------------------------------------------------------------
 
-/** The tasks as the tree the file holds: a task that is followed by deeper tasks gets them as its children. */
-export function toTree(tasks) {
+/** The tasks as the tree the file holds: a task that is followed by deeper tasks gets them as its children. `properties` gives the order of the values. */
+export function toTree(tasks, properties = []) {
   const root = [];
   const stack = [{ level: -1, children: root }];
   tasks.forEach((task, i) => {
@@ -134,9 +180,10 @@ export function toTree(tasks) {
     const parent = isSummary(tasks, i);
     const node = parent ? { id: task.id, name: task.name } : { id: task.id, name: task.name, start: task.start, duration: task.duration, progress: task.progress };
     if (!parent && task.milestone) node.milestone = true;
-    if (!parent && task.estimate !== null) node.estimate = task.estimate;
-    if (!parent && task.actual !== null) node.actual = task.actual;
     if (task.resources.length) node.resources = task.resources;
+    // The values in the order the properties are defined; a parent keeps none for the ones it adds up from its children.
+    const values = properties.length ? properties.filter((prop) => task.props[prop.name] !== undefined && !(parent && prop.aggregate)).map((prop) => [prop.name, task.props[prop.name]]) : [];
+    if (values.length) node.props = Object.fromEntries(values);
     if (task.color !== 'inherit') node.color = task.color;
     if (!parent && task.predecessors.length) node.predecessors = task.predecessors.map((pred) => (pred.lag ? { task: pred.task, lag: pred.lag } : { task: pred.task }));
     if (task.note) node.note = task.note;
@@ -167,11 +214,11 @@ function renderNode(node, depth) {
 
 /** The file text: one line per task, so that diffs and hand edits stay easy. */
 export function serializeDoc(doc) {
-  const lines = ['{', `  "$schema": ${JSON.stringify(SCHEMA_URL)},`, `  "format": ${JSON.stringify(FORMAT)},`, `  "version": ${VERSION},`, `  "project": ${JSON.stringify(projectNode(doc.project))},`, `  "tasks": ${renderTasks(toTree(doc.tasks), 1)}${doc.versions.length ? ',' : ''}`];
+  const lines = ['{', `  "$schema": ${JSON.stringify(SCHEMA_URL)},`, `  "format": ${JSON.stringify(FORMAT)},`, `  "version": ${VERSION},`, `  "project": ${JSON.stringify(projectNode(doc.project))},`, `  "tasks": ${renderTasks(toTree(doc.tasks, doc.project.properties), 1)}${doc.versions.length ? ',' : ''}`];
   if (doc.versions.length) {
     const versions = doc.versions.map((version) => {
       const head = JSON.stringify({ id: version.id, name: version.name, createdAt: version.createdAt, project: projectNode(version.project) }).slice(0, -1);
-      return `${pad(2)}${head},"tasks":${renderTasks(toTree(version.tasks), 2)}}`;
+      return `${pad(2)}${head},"tasks":${renderTasks(toTree(version.tasks, version.project.properties), 2)}}`;
     });
     lines.push(`  "versions": [\n${versions.join(',\n')}\n  ]`);
   }

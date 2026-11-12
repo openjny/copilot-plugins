@@ -174,9 +174,13 @@ export const saveLocale = (locale) => saveChoice('locale', locale, LOCALE_PREFS)
 /** What the page shows besides the chart itself, as the user left it: the task names on the chart, the task list on the left, and which optional columns the list has (the name is always there). */
 export const VIEW_COLS = ['dur', 'res'];
 export const VIEW_DEFAULT = { labels: true, list: false, cols: [] };
+/** The column of a property the user added: "p:" and its name. */
+const PROPERTY_COL = /^p:[\s\S]{1,50}$/;
+const MAX_COLS = 40;
 
-/** The column keys in their fixed order, without unknown ones or repeats. */
-const knownCols = (value) => VIEW_COLS.filter((key) => value.includes(key));
+const isCol = (key) => typeof key === 'string' && (VIEW_COLS.includes(key) || PROPERTY_COL.test(key));
+/** The column keys without repeats: the fixed columns in their order, then the properties in the order given. */
+const knownCols = (value) => [...VIEW_COLS.filter((key) => value.includes(key)), ...new Set(value.filter((key) => typeof key === 'string' && PROPERTY_COL.test(key)))].slice(0, MAX_COLS);
 
 export async function loadView() {
   try {
@@ -198,7 +202,7 @@ export async function saveView(change) {
   for (const [key, value] of Object.entries(change ?? {})) {
     if (!(key in VIEW_DEFAULT)) fail('invalid_request', 'err.badChoice', { name: key, choices: Object.keys(VIEW_DEFAULT).join(' / ') });
     if (key === 'cols') {
-      if (!Array.isArray(value) || value.some((item) => !VIEW_COLS.includes(item))) fail('invalid_request', 'err.badChoice', { name: key, choices: VIEW_COLS.join(' / ') });
+      if (!Array.isArray(value) || value.length > MAX_COLS || value.some((item) => !isCol(item))) fail('invalid_request', 'err.badChoice', { name: key, choices: `${VIEW_COLS.join(' / ')} / p:<property name>` });
       view.cols = knownCols(value);
     } else {
       if (typeof value !== 'boolean') fail('invalid_request', 'err.badChoice', { name: key, choices: 'true / false' });

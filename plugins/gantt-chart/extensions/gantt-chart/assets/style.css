@@ -141,6 +141,14 @@ button, input, select, textarea { font: inherit; color: inherit; }
 .lrow .c-name { display: flex; align-items: center; gap: 2px; padding-right: 4px; }
 .lrow .c-dur { text-align: right; color: var(--muted); }
 .lrow .c-res { color: var(--muted); font-size: 12px; }
+/* The columns of the properties; a parent's figure that is worked out from its children is slanted */
+.lrow .c-prop { color: var(--muted); font-size: 12px; }
+.lrow .c-prop.pt-number { text-align: right; font-variant-numeric: tabular-nums; }
+.lrow .c-prop.pt-checkbox { text-align: center; color: var(--fg); }
+.lrow .c-prop.pt-select { color: var(--fg); }
+.lrow .c-prop.derived { font-style: italic; }
+.lrow .c-prop a { color: var(--accent); text-decoration: none; }
+.lrow .c-prop a:hover { text-decoration: underline; }
 .lrow.summary .name { font-weight: 600; }
 .lrow .name { overflow: hidden; text-overflow: ellipsis; }
 .caret, .caret-space { flex: none; width: 18px; height: 18px; }
@@ -302,7 +310,7 @@ button, input, select, textarea { font: inherit; color: inherit; }
 .links.focus path.link.rel { opacity: 1; stroke-width: calc(var(--lw) * 1.5); }
 .links path.link.picked { stroke-width: calc(var(--lw) * 2.2); }
 
-/* Detail panel: under the timeline, opened by clicking a task. It is as small as its content (progress, effort and note
+/* Detail panel: under the timeline, opened by clicking a task. It is as small as its content (progress, the properties and note
    for a task; the other fields open with the button in its header) and scrolls inside when there is more. */
 .panel { flex: none; max-height: clamp(110px, 26vh, 240px); display: flex; flex-direction: column; border-top: 1px solid var(--line); background: var(--bg); }
 .ph { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 3px 6px 3px 12px; border-bottom: 1px solid var(--line); background: var(--head); }
@@ -316,7 +324,10 @@ button, input, select, textarea { font: inherit; color: inherit; }
 .form { padding: 12px; display: flex; flex-direction: column; gap: 12px; }
 .panel .form { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); grid-auto-flow: dense; gap: 12px 16px; align-items: start; }
 .panel .form .wide { grid-column: span 2; }
-.panel .form.quick { grid-template-columns: minmax(170px, 1fr) 96px 96px minmax(220px, 2.4fr); gap: 6px 16px; padding: 8px 12px 10px; }
+.panel .form.quick { grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 6px 16px; padding: 8px 12px 10px; }
+.quick > .lbl:first-child { grid-column: span 2; }
+.quick > label.note { grid-column: span 3; }
+.quick .plink { color: var(--accent); text-decoration: none; }
 .quick .note-hint { grid-column: 1 / -1; }
 .quick textarea { height: 52px; }
 .panel .form.more { border-top: 1px solid var(--line); }
@@ -361,6 +372,17 @@ button, input, select, textarea { font: inherit; color: inherit; }
 .sg-item.create:not(:first-child) { margin-top: 2px; border-top: 1px solid var(--line); border-radius: 0 0 5px 5px; }
 .sg-item.create .icon { width: 14px; height: 14px; }
 .hint { color: var(--muted); font-size: 12px; margin: 0; padding: 12px; line-height: 1.6; }
+/* The properties in the project settings: a card for each, and a row to add one */
+.props { display: flex; flex-direction: column; gap: 8px; }
+.prop-row { display: flex; flex-direction: column; gap: 8px; padding: 8px; border: 1px solid var(--line); border-radius: 8px; background: var(--head); }
+.prop-head { display: flex; align-items: center; gap: 8px; }
+.prop-head input { flex: 1; min-width: 0; }
+.prop-type { flex: none; padding: 1px 8px; border: 1px solid var(--line); border-radius: 10px; background: var(--bg); color: var(--muted); font-size: 11px; }
+.prop-body { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.prop-body label:has(textarea) { grid-column: 1 / -1; }
+.prop-body textarea { height: 64px; }
+.prop-add { display: grid; grid-template-columns: 1fr auto auto; gap: 6px; }
+.prop-add select { width: auto; }
 .form .hint { padding: 0; }
 .err { margin: 0; color: var(--danger); font-size: 12px; }
 .row-actions { display: flex; flex-wrap: wrap; gap: 8px; }
@@ -450,4 +472,5 @@ button, input, select, textarea { font: inherit; color: inherit; }
 @media (max-width: 599px) {
   .panel .form .wide { grid-column: auto; }
   .panel .form.quick { grid-template-columns: 1fr; }
+  .quick > .lbl:first-child, .quick > label.note { grid-column: auto; }
 }

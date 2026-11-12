@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { SCHEMA, readDoc, serializeDoc, toTree } from '../lib/format.mjs';
 import { setLocale } from '../lib/i18n.mjs';
-import { MAX_DURATION, MAX_LAG, MAX_LEVEL, MAX_TASKS, MAX_VERSIONS, PALETTE, applyOps, describe, emptyDoc, finalize, formatDate, makeCalendar, maxSlideEarlier, parseDate, parseDuration, schedule, weekStartOnOrBefore } from '../lib/model.mjs';
+import { MAX_DURATION, MAX_LAG, MAX_LEVEL, MAX_PROPERTIES, MAX_TASKS, MAX_VERSIONS, PALETTE, applyOps, describe, emptyDoc, finalize, formatDate, makeCalendar, maxSlideEarlier, parseDate, parseDuration, schedule, weekStartOnOrBefore } from '../lib/model.mjs';
 
 setLocale('en');
 const NOW = new Date(2026, 10, 12, 9, 30);
@@ -349,34 +349,170 @@ test('the file leaves out what is at its default, and keeps the weekly days off,
   assert.deepEqual(readDoc(plain).project.weeklyOff, ['sat', 'sun']);
 });
 
-test('estimated and actual hours are separate, add up under a parent, and show in the description', () => {
-  const doc = ops(sample(), [{ op: 'update', id: 'b', estimate: 8, actual: 3.5 }, { op: 'update', id: 'c', estimate: 16 }, { op: 'update', id: 'e', actual: 2 }]);
+/** The sample with the kinds of properties a project might add. */
+function withProperties() {
+  return ops(sample(), [
+    { op: 'add_property', name: 'Hours', type: 'number', unit: 'h', aggregate: 'sum' },
+    { op: 'add_property', name: 'Risk', type: 'select', options: ['low', 'high'] },
+    { op: 'add_property', name: 'Area', type: 'tags' },
+    { op: 'add_property', name: 'Review', type: 'date' },
+    { op: 'add_property', name: 'Done', type: 'checkbox' },
+    { op: 'add_property', name: 'Spec', type: 'url' },
+    { op: 'add_property', name: 'Memo', type: 'text' },
+    { op: 'add_property', name: 'Score', type: 'number' },
+  ]);
+}
+
+test('a project defines properties of the kinds number, text, date, select, tags, checkbox and url', () => {
+  const doc = withProperties();
+  assert.deepEqual(doc.project.properties.map((prop) => [prop.name, prop.type]), [['Hours', 'number'], ['Risk', 'select'], ['Area', 'tags'], ['Review', 'date'], ['Done', 'checkbox'], ['Spec', 'url'], ['Memo', 'text'], ['Score', 'number']]);
+  assert.deepEqual(doc.project.properties[0], { name: 'Hours', type: 'number', unit: 'h', aggregate: 'sum' });
+  assert.deepEqual(doc.project.properties[1], { name: 'Risk', type: 'select', options: ['low', 'high'] });
+  assert.throws(() => ops(doc, [{ op: 'add_property', name: 'Hours', type: 'text' }]), (error) => error.key === 'err.propertyUsed');
+  assert.throws(() => ops(doc, [{ op: 'add_property', name: 'X', type: 'color' }]), (error) => error.key === 'err.expect' && /one of number/.test(error.message));
+  assert.throws(() => ops(doc, [{ op: 'add_property', name: ' ', type: 'text' }]), (error) => error.key === 'err.expect');
+  assert.throws(() => ops(doc, [{ op: 'add_property', name: 'X', type: 'text', unit: 'h' }]), (error) => error.key === 'err.propOnly');
+  assert.throws(() => ops(doc, [{ op: 'add_property', name: 'X', type: 'number', options: ['a'] }]), (error) => error.key === 'err.propOnly');
+  assert.throws(() => ops(doc, [{ op: 'add_property', name: 'X', type: 'select', options: ['a', 'a'] }]), (error) => error.key === 'err.expect');
+  assert.throws(() => ops(doc, [{ op: 'add_property', name: 'X', type: 'number', aggregate: 'median' }]), (error) => error.key === 'err.expect');
+});
+
+test('the values of a task are checked against its properties, and cleared with null', () => {
+  const doc = ops(withProperties(), [
+    { op: 'update', id: 'b', props: { Hours: 8.5, Risk: 'high', Area: ['UI', ' UI ', 'API'], Review: '2026-12-01', Done: true, Spec: 'https://example.com/a?b=1', Memo: '  hello  ', Score: 3 } },
+  ]);
+  const values = describe(doc).tasks.find((task) => task.id === 'b').props;
+  assert.deepEqual(values, { Hours: 8.5, Risk: 'high', Area: ['UI', 'API'], Review: '2026-12-01', Done: true, Spec: 'https://example.com/a?b=1', Memo: 'hello', Score: 3 });
+  const bad = (props) => assert.throws(() => ops(doc, [{ op: 'update', id: 'b', props }]), (error) => error.code === 'invalid_input');
+  bad({ Hours: '8' });
+  bad({ Hours: Number.POSITIVE_INFINITY });
+  bad({ Risk: 'medium' });
+  bad({ Area: [1] });
+  bad({ Review: '2026-13-01' });
+  bad({ Done: 'yes' });
+  bad({ Spec: 'ftp://example.com' });
+  bad({ Spec: 'not a url' });
+  bad({ Nope: 1 });
+  bad([1]);
+  const cleared = ops(doc, [{ op: 'update', id: 'b', props: { Hours: null, Done: false, Memo: '  ', Area: [] } }]);
+  assert.deepEqual(Object.keys(describe(cleared).tasks.find((task) => task.id === 'b').props), ['Risk', 'Review', 'Spec', 'Score']);
+  assert.deepEqual(describe(ops(doc, [{ op: 'add', name: 'new', props: { Score: -2.5 } }])).tasks.at(-1).props, { Score: -2.5 });
+  // Only the keys given change.
+  assert.equal(describe(ops(doc, [{ op: 'update', id: 'b', props: { Score: 4 } }])).tasks.find((task) => task.id === 'b').props.Risk, 'high');
+});
+
+test('a number property that adds up is worked out for a parent and for the project; the others are the parent\'s own', () => {
+  const doc = ops(withProperties(), [
+    { op: 'update', id: 'b', props: { Hours: 8, Score: 2 } },
+    { op: 'update', id: 'c', props: { Hours: 16 } },
+    { op: 'update', id: 'e', props: { Hours: 2.5 } },
+    { op: 'update', id: 'a', props: { Score: 9, Risk: 'low' } },
+  ]);
   const by = Object.fromEntries(describe(doc).tasks.map((task) => [task.id, task]));
-  assert.deepEqual([by.b.estimate, by.b.actual], [8, 3.5]);
-  assert.deepEqual([by.a.estimate, by.a.actual], [24, 3.5]);
-  assert.deepEqual([by.e.estimate, by.e.actual], [null, 2]);
-  assert.deepEqual([describe(doc).project.estimate, describe(doc).project.actual], [24, 5.5]);
-  assert.throws(() => ops(doc, [{ op: 'update', id: 'a', actual: 1 }]), (error) => error.code === 'summary_field');
-  assert.throws(() => ops(doc, [{ op: 'update', id: 'b', effort: 5 }]), (error) => error.code === 'invalid_input' && /effort/.test(error.message));
-  assert.throws(() => ops(doc, [{ op: 'update', id: 'b', actual: -1 }]), (error) => error.code === 'invalid_input');
-  assert.equal(ops(doc, [{ op: 'update', id: 'b', actual: null }]).tasks.find((task) => task.id === 'b').actual, null);
-  const raw = JSON.parse(serializeDoc(doc));
-  assert.deepEqual([nodeOf(raw.tasks, 'b').estimate, nodeOf(raw.tasks, 'b').actual], [8, 3.5]);
-  assert.equal(nodeOf(raw.tasks, 'a').estimate, undefined);
+  assert.equal(by.a.props.Hours, 24);
+  assert.equal(by.a.props.Score, 9, 'no way of adding up, so the parent keeps its own value');
+  assert.equal(by.a.props.Risk, 'low');
+  assert.deepEqual(describe(doc).project.totals, { Hours: 26.5 });
+  assert.throws(() => ops(doc, [{ op: 'update', id: 'a', props: { Hours: 1 } }]), (error) => error.code === 'summary_field' && /Hours/.test(error.message));
+  // A leaf that becomes a parent loses its value for what adds up, and a parent is not written with one.
+  const parent = ops(doc, [{ op: 'indent', id: 'e' }]);
+  assert.equal(parent.tasks.find((task) => task.id === 'a').props.Hours, undefined);
+  assert.equal(nodeOf(JSON.parse(serializeDoc(doc)).tasks, 'a').props.Hours, undefined);
+  for (const [aggregate, expected] of [['avg', 12], ['min', 8], ['max', 16], [null, null]]) {
+    const next = ops(doc, [{ op: 'update_property', name: 'Hours', aggregate }]);
+    assert.equal(describe(next).tasks.find((task) => task.id === 'a').props.Hours ?? null, expected, aggregate);
+  }
+  assert.equal(describe(ops(doc, [{ op: 'update_property', name: 'Hours', aggregate: 'avg' }])).project.totals.Hours, 8.8333);
+  assert.equal(describe(ops(doc, [{ op: 'update_property', name: 'Hours', aggregate: null }])).project.totals, undefined);
 });
 
-test('a version 2 file (which calls the estimate "effort") is read as the current version', () => {
-  const raw = JSON.parse(serializeDoc(ops(sample(), [{ op: 'update', id: 'b', estimate: 8 }, { op: 'save_version', name: 'old' }])));
+test('a property can be renamed, changed and deleted, and its values follow', () => {
+  const doc = ops(withProperties(), [{ op: 'update', id: 'b', props: { Risk: 'high', Score: 1 } }, { op: 'update', id: 'c', props: { Risk: 'low', Score: 2 } }]);
+  const renamed = ops(doc, [{ op: 'update_property', name: 'Risk', newName: 'Danger', options: ['low', 'high', 'extreme'] }]);
+  assert.deepEqual(renamed.project.properties[1], { name: 'Danger', type: 'select', options: ['low', 'high', 'extreme'] });
+  assert.equal(describe(renamed).tasks.find((task) => task.id === 'b').props.Danger, 'high');
+  assert.equal(describe(renamed).tasks.find((task) => task.id === 'b').props.Risk, undefined);
+  assert.throws(() => ops(doc, [{ op: 'update_property', name: 'Risk', options: ['low'] }]), (error) => error.key === 'err.optionInUse' && /"high"/.test(error.message));
+  assert.deepEqual(ops(ops(doc, [{ op: 'update', id: 'b', props: { Risk: null } }]), [{ op: 'update_property', name: 'Risk', options: ['low'] }]).project.properties[1].options, ['low']);
+  assert.throws(() => ops(doc, [{ op: 'update_property', name: 'Risk', newName: 'Score' }]), (error) => error.key === 'err.propertyUsed');
+  assert.throws(() => ops(doc, [{ op: 'update_property', name: 'Nope', unit: 'x' }]), (error) => error.code === 'not_found');
+  assert.throws(() => ops(doc, [{ op: 'update_property', name: 'Score', type: 'text' }]), (error) => error.key === 'err.unknownKey', 'the type stays');
+  assert.deepEqual(ops(doc, [{ op: 'update_property', name: 'Score', unit: 'pt' }]).project.properties[7], { name: 'Score', type: 'number', unit: 'pt' });
+  assert.equal(ops(doc, [{ op: 'update_property', name: 'Hours', unit: null }]).project.properties[0].unit, undefined);
+  const result = applyOps(doc, [{ op: 'delete_property', name: 'Score' }], { now: NOW });
+  assert.deepEqual(result.results[0], { op: 'delete_property', name: 'Score', cleared: 2 });
+  assert.equal(result.doc.project.properties.some((prop) => prop.name === 'Score'), false);
+  assert.equal(result.doc.tasks.every((task) => task.props.Score === undefined), true);
+  // A duplicate keeps the values; a saved version keeps the properties it had.
+  assert.equal(ops(doc, [{ op: 'duplicate', id: 'b' }]).tasks.find((task) => task.id === 't1').props.Score, 1);
+  const saved = ops(doc, [{ op: 'save_version', name: 'with' }, { op: 'delete_property', name: 'Score' }]);
+  assert.equal(saved.versions[0].project.properties.length, 8);
+  const back = ops(saved, [{ op: 'restore_version', id: 'v1' }]);
+  assert.equal(back.project.properties.length, 8);
+  assert.equal(back.tasks.find((task) => task.id === 'b').props.Score, 1);
+  const many = Array.from({ length: 20 }, (_, i) => ({ op: 'add_property', name: `p${i}`, type: 'text' }));
+  assert.throws(() => ops(emptyDoc('x'), [...many, { op: 'add_property', name: 'one more', type: 'text' }]), (error) => error.key === 'err.maxProperties');
+});
+
+test('the file holds the definitions and the values in the order of the properties, and round-trips', () => {
+  const doc = ops(withProperties(), [
+    { op: 'update', id: 'b', props: { Score: 3, Hours: 8, Risk: 'low' } },
+    { op: 'update', id: 'a', props: { Risk: 'high', Memo: 'phase' } },
+  ]);
+  const text = serializeDoc(doc);
+  const raw = JSON.parse(text);
+  assert.equal(raw.version, 4);
+  assert.deepEqual(raw.project.properties.map((prop) => prop.name), ['Hours', 'Risk', 'Area', 'Review', 'Done', 'Spec', 'Memo', 'Score']);
+  assert.deepEqual(Object.keys(nodeOf(raw.tasks, 'b').props), ['Hours', 'Risk', 'Score']);
+  assert.deepEqual(nodeOf(raw.tasks, 'a').props, { Risk: 'high', Memo: 'phase' });
+  assert.equal(nodeOf(raw.tasks, 'c').props, undefined);
+  assert.equal(serializeDoc(readDoc(JSON.parse(text))), text);
+  assert.deepEqual(readDoc(raw).project.properties, doc.project.properties);
+  assert.equal(JSON.parse(serializeDoc(sample())).project.properties, undefined, 'a project without properties says nothing');
+  const bad = (change) => assert.throws(() => { const copy = structuredClone(raw); change(copy); readDoc(copy); }, (error) => error.code === 'invalid_file');
+  bad((copy) => { nodeOf(copy.tasks, 'b').props.Nope = 1; });
+  bad((copy) => { nodeOf(copy.tasks, 'b').props.Risk = 'medium'; });
+  bad((copy) => { nodeOf(copy.tasks, 'b').props.Hours = 'lots'; });
+  bad((copy) => { copy.project.properties.push({ name: 'Hours', type: 'text' }); });
+  bad((copy) => { copy.project.properties[1].options = ['a', 'a']; });
+  bad((copy) => { copy.project.properties[0].type = 'weight'; });
+});
+
+test('a version 3 file keeps its estimated and actual hours as number properties', () => {
+  const doc = sample();
+  const raw = JSON.parse(serializeDoc(ops(doc, [{ op: 'save_version', name: 'old' }])));
+  raw.version = 3;
+  nodeOf(raw.tasks, 'b').estimate = 8;
+  nodeOf(raw.tasks, 'b').actual = 3.5;
+  nodeOf(raw.tasks, 'c').estimate = 16;
+  nodeOf(raw.versions[0].tasks, 'e').actual = 2;
+  const read = readDoc(raw);
+  assert.equal(read.version, 4);
+  assert.deepEqual(read.project.properties, [{ name: 'Estimated hours', type: 'number', unit: 'h', aggregate: 'sum' }, { name: 'Actual hours', type: 'number', unit: 'h', aggregate: 'sum' }]);
+  const by = Object.fromEntries(describe(read).tasks.map((task) => [task.id, task]));
+  assert.deepEqual(by.b.props, { 'Estimated hours': 8, 'Actual hours': 3.5 });
+  assert.equal(by.a.props['Estimated hours'], 24);
+  assert.deepEqual(describe(read).project.totals, { 'Estimated hours': 24, 'Actual hours': 3.5 });
+  // Only where the file used them: the saved version had just an actual figure.
+  assert.deepEqual(read.versions[0].project.properties, [{ name: 'Actual hours', type: 'number', unit: 'h', aggregate: 'sum' }]);
+  assert.equal(read.versions[0].tasks.find((task) => task.id === 'e').props['Actual hours'], 2);
+  assert.equal(JSON.parse(serializeDoc(read)).version, 4);
+  // A file that never used them gets no properties.
+  const plain = JSON.parse(serializeDoc(sample()));
+  plain.version = 3;
+  assert.deepEqual(readDoc(plain).project.properties, []);
+  assert.throws(() => readDoc({ ...plain, version: 5 }), (error) => error.code === 'unsupported_version');
+});
+
+test('a version 2 file (which calls the estimate "effort") is read through version 3 as the current version', () => {
+  const raw = JSON.parse(serializeDoc(sample()));
   raw.version = 2;
-  const old = JSON.parse(JSON.stringify(raw).replaceAll('"estimate"', '"effort"'));
-  const doc = readDoc(old);
-  assert.equal(doc.version, 3);
-  assert.equal(doc.tasks.find((task) => task.id === 'b').estimate, 8);
-  assert.equal(doc.versions[0].tasks.find((task) => task.id === 'b').estimate, 8);
-  assert.equal(JSON.parse(serializeDoc(doc)).version, 3);
-  assert.throws(() => readDoc({ ...old, version: 4 }), (error) => error.code === 'unsupported_version');
+  nodeOf(raw.tasks, 'b').effort = 8;
+  const doc = readDoc(raw);
+  assert.equal(doc.version, 4);
+  assert.equal(doc.tasks.find((task) => task.id === 'b').props['Estimated hours'], 8);
+  assert.equal(describe(doc).tasks.find((task) => task.id === 'a').props['Estimated hours'], 8);
 });
-
 test('versions restore the earlier state and keep an automatic backup', () => {
   let doc = ops(sample(), [{ op: 'save_version', name: 'first' }]);
   doc = ops(doc, [{ op: 'delete', id: 'e' }]);
@@ -394,7 +530,7 @@ test('the file keeps the tasks as a tree, one task per line, and round-trips', (
   const doc = sample();
   const text = serializeDoc(doc);
   const raw = JSON.parse(text);
-  assert.equal(raw.version, 3);
+  assert.equal(raw.version, 4);
   assert.match(raw.$schema, /gantt-chart\.schema\.json$/);
   assert.deepEqual(raw.tasks.map((task) => task.id), ['a', 'e']);
   assert.deepEqual(raw.tasks[0].children.map((task) => task.id), ['b', 'c', 'd']);
@@ -415,7 +551,8 @@ test('the limits in the schema are the ones the model enforces', () => {
   assert.equal(SCHEMA.$defs.dependency.properties.lag.maximum, MAX_LAG);
   assert.deepEqual(SCHEMA.$defs.color.enum, PALETTE);
   assert.equal(new RegExp(SCHEMA.$defs.id.pattern).test('a-B_9'), true);
-  assert.equal(SCHEMA.properties.version.const, 3);
+  assert.equal(SCHEMA.properties.version.const, 4);
+  assert.equal(SCHEMA.$defs.project.properties.properties.maxItems, MAX_PROPERTIES);
   assert.ok(MAX_LEVEL >= 8);
 });
 

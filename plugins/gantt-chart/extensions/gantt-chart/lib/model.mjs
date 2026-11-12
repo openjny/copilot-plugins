@@ -4,7 +4,7 @@
 import { t } from './i18n.mjs';
 
 export const FORMAT = 'openjny-gantt-chart';
-export const VERSION = 3;
+export const VERSION = 4;
 /** The color labels. A task that has none of its own ("inherit") takes the color of its parent, and blue at the top. */
 export const PALETTE = ['blue', 'green', 'orange', 'red', 'purple', 'pink', 'gray'];
 export const COLORS = ['inherit', ...PALETTE];
@@ -14,8 +14,14 @@ export const MAX_TASKS = 2000;
 export const MAX_DURATION = 3650;
 export const MAX_LAG = 999;
 export const ID_RE = /^[A-Za-z0-9_-]{1,32}$/;
-const TASK_FIELDS = ['name', 'start', 'duration', 'progress', 'estimate', 'actual', 'resources', 'color', 'note', 'collapsed', 'milestone', 'predecessors', 'due'];
+const TASK_FIELDS = ['name', 'start', 'duration', 'progress', 'resources', 'color', 'note', 'collapsed', 'milestone', 'predecessors', 'due', 'props'];
 export const WEEK_STARTS = ['mon', 'sun'];
+/** What a property the user adds can hold. */
+export const PROPERTY_TYPES = ['number', 'text', 'date', 'select', 'tags', 'checkbox', 'url'];
+/** How a number property of a parent task is worked out from the tasks under it. */
+export const AGGREGATES = ['sum', 'avg', 'min', 'max'];
+export const MAX_PROPERTIES = 20;
+export const MAX_OPTIONS = 50;
 
 /** An error with a code for programs and a message in the current language (key and params let a caller say it again). */
 export class ModelError extends Error {
@@ -163,17 +169,6 @@ const FIELD = {
     if (typeof value !== 'number' || !Number.isFinite(value) || value < 0 || value > 100) bad(what, 'expect.progress');
     return Math.round(value);
   },
-  estimate(value, what) {
-    return FIELD.hours(value, what);
-  },
-  actual(value, what) {
-    return FIELD.hours(value, what);
-  },
-  hours(value, what) {
-    if (value === null) return null;
-    if (typeof value !== 'number' || !Number.isFinite(value) || value < 0 || value > 1e6) bad(what, 'expect.effort');
-    return round2(value);
-  },
   resources(value, what) {
     const list = Array.isArray(value) ? value : typeof value === 'string' ? value.split(/[,、]/) : null;
     if (!list || list.some((item) => typeof item !== 'string')) bad(what, 'expect.resources');
@@ -232,6 +227,129 @@ const FIELD = {
   },
 };
 
+// ---- Properties: the fields the user adds to the tasks ----------------------------------------------------------
+
+const URL_RE = /^https?:\/\/\S+$/i;
+const round4 = (value) => Math.round(value * 1e4) / 1e4;
+
+/**
+ * Checks a value for the property `prop` and returns it as it is kept. null stands for "empty" (a blank text, an
+ * unchecked box, no tags, nothing chosen), which is not stored.
+ */
+export function checkValue(prop, value, what) {
+  if (value === null) return null;
+  switch (prop.type) {
+    case 'number':
+      if (typeof value !== 'number' || !Number.isFinite(value) || Math.abs(value) > 1e9) bad(what, 'expect.pNumber');
+      return round4(value);
+    case 'text':
+      if (typeof value !== 'string' || value.length > 500) bad(what, 'expect.pText');
+      return value.trim() || null;
+    case 'url':
+      if (typeof value !== 'string' || value.length > 2000 || !URL_RE.test(value.trim())) bad(what, 'expect.pUrl');
+      return value.trim();
+    case 'date':
+      if (parseDate(value) === null) bad(what, 'expect.date');
+      return value;
+    case 'select':
+      if (typeof value !== 'string' || !prop.options.includes(value)) bad(what, 'expect.pSelect', { options: prop.options.join(', ') || '-' });
+      return value;
+    case 'tags': {
+      const list = Array.isArray(value) ? value : typeof value === 'string' ? value.split(/[,、]/) : null;
+      if (!list || list.some((item) => typeof item !== 'string')) bad(what, 'expect.pTags');
+      const names = [...new Set(list.map((item) => item.trim()).filter(Boolean))];
+      if (names.length > 20 || names.some((item) => item.length > 50)) bad(what, 'expect.pTags');
+      return names.length ? names : null;
+    }
+    case 'checkbox':
+      if (typeof value !== 'boolean') bad(what, 'expect.boolean');
+      return value || null;
+    default:
+      return fail('invalid_input', 'err.unknownPropertyType', { type: String(prop.type) });
+  }
+}
+
+/** Checks a property definition and returns it as it is kept: the name and type, then the settings that its type has. */
+export function checkProperty(def, what = 'property') {
+  if (!isObject(def)) bad(what, 'expect.property');
+  allowKeys(def, ['name', 'type', 'options', 'unit', 'aggregate']);
+  if (typeof def.name !== 'string' || !def.name.trim() || def.name.trim().length > 50) bad(`${what}.name`, 'expect.propName');
+  if (!PROPERTY_TYPES.includes(def.type)) bad(`${what}.type`, 'expect.propType', { list: PROPERTY_TYPES.join(', ') });
+  const out = { name: def.name.trim(), type: def.type };
+  const only = (key, type) => {
+    if (def.type !== type) fail('invalid_input', 'err.propOnly', { what: `${what}.${key}`, type });
+  };
+  if (def.type === 'select') {
+    const options = def.options === undefined ? [] : def.options;
+    const trimmed = Array.isArray(options) ? options.map((item) => (typeof item === 'string' ? item.trim() : null)) : null;
+    if (!trimmed || trimmed.length > MAX_OPTIONS || trimmed.some((item) => !item || item.length > 50) || new Set(trimmed).size !== trimmed.length) bad(`${what}.options`, 'expect.options', { max: MAX_OPTIONS });
+    out.options = trimmed;
+  } else if (def.options !== undefined) only('options', 'select');
+  if (def.unit !== undefined) {
+    only('unit', 'number');
+    if (typeof def.unit !== 'string' || def.unit.trim().length > 10) bad(`${what}.unit`, 'expect.unit');
+    if (def.unit.trim()) out.unit = def.unit.trim();
+  }
+  if (def.aggregate !== undefined) {
+    only('aggregate', 'number');
+    if (!AGGREGATES.includes(def.aggregate)) bad(`${what}.aggregate`, 'expect.aggregate', { list: AGGREGATES.join(', ') });
+    out.aggregate = def.aggregate;
+  }
+  return out;
+}
+
+/** Checks the list of property definitions of a project (names must differ). */
+export function checkProperties(list, what = 'properties') {
+  if (!Array.isArray(list) || list.length > MAX_PROPERTIES) bad(what, 'expect.properties', { max: MAX_PROPERTIES });
+  const names = new Set();
+  return list.map((def, i) => {
+    const prop = checkProperty(def, `${what}[${i}]`);
+    if (names.has(prop.name)) fail('invalid_input', 'err.propertyUsed', { name: prop.name });
+    names.add(prop.name);
+    return prop;
+  });
+}
+
+/** The values of a task for an edit, checked against the project's properties: { name: value | null } (null clears). */
+function readValues(value, properties, what) {
+  if (!isObject(value)) bad(what, 'expect.props');
+  const out = {};
+  for (const [name, item] of Object.entries(value)) {
+    const prop = properties.find((candidate) => candidate.name === name);
+    if (!prop) fail('invalid_input', 'err.unknownProperty', { where: what, name });
+    out[name] = checkValue(prop, item, `${what}[${JSON.stringify(name)}]`);
+  }
+  return out;
+}
+
+/** Checks (and tidies) the values the tasks hold: every name must be a property, every value must suit it. */
+function checkProps(tasks, properties, where, code) {
+  const byName = new Map(properties.map((prop) => [prop.name, prop]));
+  tasks.forEach((task, i) => {
+    for (const [name, value] of Object.entries(task.props)) {
+      const prop = byName.get(name);
+      if (!prop) fail(code, 'err.unknownProperty', { where: `${where}[${i}].props`, name });
+      try {
+        const kept = checkValue(prop, value, `${where}[${i}].props[${JSON.stringify(name)}]`);
+        if (kept === null) delete task.props[name];
+        else task.props[name] = kept;
+      } catch (error) {
+        if (error instanceof ModelError) error.code = code;
+        throw error;
+      }
+    }
+  });
+}
+
+/** The one number a parent shows for a property that adds up (or averages...) the tasks under it; null when none of them has a value. */
+function aggregateOf(kind, numbers) {
+  if (!numbers.length) return null;
+  if (kind === 'min') return Math.min(...numbers);
+  if (kind === 'max') return Math.max(...numbers);
+  const sum = numbers.reduce((total, value) => total + value, 0);
+  return round4(kind === 'avg' ? sum / numbers.length : sum);
+}
+
 export const blankTask = (id) => ({
   id,
   name: '',
@@ -239,8 +357,6 @@ export const blankTask = (id) => ({
   start: '1970-01-01',
   duration: 1,
   progress: 0,
-  estimate: null,
-  actual: null,
   resources: [],
   color: 'inherit',
   predecessors: [],
@@ -248,14 +364,15 @@ export const blankTask = (id) => ({
   collapsed: false,
   milestone: false,
   due: null,
+  props: {},
 });
 
 export function emptyDoc(name = '') {
-  return { format: FORMAT, version: VERSION, project: { name: name.slice(0, 200), holidays: [], extraWorkdays: [], weeklyOff: [...DEFAULT_WEEKLY_OFF], weekStart: 'mon' }, tasks: [], versions: [] };
+  return { format: FORMAT, version: VERSION, project: { name: name.slice(0, 200), holidays: [], extraWorkdays: [], weeklyOff: [...DEFAULT_WEEKLY_OFF], weekStart: 'mon', properties: [] }, tasks: [], versions: [] };
 }
 
-/** Checks the outline (the first task is at level 0, a level rises by at most 1) and the predecessors of a flat task list. */
-export function checkTasks(tasks, where, code) {
+/** Checks the outline (the first task is at level 0, a level rises by at most 1), the predecessors and, when the properties are given, the values of a flat task list. */
+export function checkTasks(tasks, where, code, properties) {
   const ids = new Set(tasks.map((task) => task.id));
   tasks.forEach((task, i) => {
     if (i === 0 ? task.level !== 0 : task.level > tasks[i - 1].level + 1) fail(code, 'err.badLevel', { where: `${where}[${i}]`, name: task.name });
@@ -264,18 +381,22 @@ export function checkTasks(tasks, where, code) {
       if (!ids.has(pred.task)) fail(code, 'err.missingPred', { name: task.name, task: pred.task });
     }
   });
+  if (properties) checkProps(tasks, properties, where, code);
 }
 
 /**
  * Makes the document consistent: checks the structure, drops predecessors from parent tasks, and
- * stores the computed dates, progress and hours back into the tasks. Throws on a dependency cycle.
+ * stores the computed dates and progress back into the tasks. Throws on a dependency cycle.
  */
 export function finalize(doc, code = 'invalid_input') {
-  checkTasks(doc.tasks, 'tasks', code);
+  checkTasks(doc.tasks, 'tasks', code, doc.project.properties);
+  const adding = doc.project.properties.filter((prop) => prop.aggregate);
   doc.tasks.forEach((task, i) => {
     if (isSummary(doc.tasks, i)) {
       task.predecessors = [];
       task.milestone = false;
+      // What a parent shows for these comes from the tasks under it, so it keeps no value of its own.
+      for (const prop of adding) delete task.props[prop.name];
     }
   });
   const result = schedule(doc);
@@ -285,8 +406,6 @@ export function finalize(doc, code = 'invalid_input') {
     if (row.summary) {
       task.duration = row.duration;
       task.progress = Math.round(row.progress);
-      task.estimate = row.estimate === null ? null : round2(row.estimate);
-      task.actual = row.actual === null ? null : round2(row.actual);
     }
   });
   return result;
@@ -317,18 +436,14 @@ export function schedule(doc, cal = makeCalendar(doc.project)) {
       let endDay = -Infinity;
       let work = 0;
       let done = 0;
-      let estimate = null;
-      let actual = null;
       for (let child = i + 1; child < end; child = subtreeEnd(tasks, child)) {
         const sub = resolve(child);
         startDay = Math.min(startDay, sub.startDay);
         endDay = Math.max(endDay, sub.endDay);
         work += sub.work;
         done += sub.done;
-        if (sub.estimate !== null) estimate = (estimate ?? 0) + sub.estimate;
-        if (sub.actual !== null) actual = (actual ?? 0) + sub.actual;
       }
-      row = { summary: true, milestone: false, startDay, endDay, duration: cal.count(startDay, endDay), progress: work ? done / work : 0, estimate, actual, work, done };
+      row = { summary: true, milestone: false, startDay, endDay, duration: cal.count(startDay, endDay), progress: work ? done / work : 0, work, done };
     } else {
       let startDay = cal.next(parseDate(task.start));
       for (const pred of task.predecessors) {
@@ -344,8 +459,6 @@ export function schedule(doc, cal = makeCalendar(doc.project)) {
         endDay: cal.add(startDay, task.duration - 1),
         duration: task.duration,
         progress: task.progress,
-        estimate: task.estimate,
-        actual: task.actual,
         work: task.duration,
         done: task.duration * task.progress,
       };
@@ -366,7 +479,23 @@ export function schedule(doc, cal = makeCalendar(doc.project)) {
     ancestors.push(i);
   }
 
-  const project = { count: tasks.length, startDay: null, endDay: null, duration: 0, progress: 0, estimate: null, actual: null };
+  // The value of every property for every row. A parent shows, for a number property that adds up, the figure worked
+  // out from the leaf tasks under it; for the others it shows its own value.
+  const properties = doc.project.properties;
+  const leafNumbers = (prop, from, to) => {
+    const numbers = [];
+    for (let j = from; j < to; j++) if (!rows[j].summary && typeof tasks[j].props[prop.name] === 'number') numbers.push(tasks[j].props[prop.name]);
+    return numbers;
+  };
+  rows.forEach((row, i) => {
+    row.props = {};
+    for (const prop of properties) {
+      const own = tasks[i].props[prop.name];
+      row.props[prop.name] = prop.aggregate && row.summary ? aggregateOf(prop.aggregate, leafNumbers(prop, i + 1, subtreeEnd(tasks, i))) : own === undefined ? null : own;
+    }
+  });
+
+  const project = { count: tasks.length, startDay: null, endDay: null, duration: 0, progress: 0, totals: {} };
   const top = rows.filter((row) => row.level === 0);
   if (top.length) {
     project.startDay = Math.min(...top.map((row) => row.startDay));
@@ -374,11 +503,9 @@ export function schedule(doc, cal = makeCalendar(doc.project)) {
     project.duration = cal.count(project.startDay, project.endDay);
     const work = top.reduce((sum, row) => sum + row.work, 0);
     project.progress = work ? top.reduce((sum, row) => sum + row.done, 0) / work : 0;
-    for (const row of top) {
-      if (row.estimate !== null) project.estimate = (project.estimate ?? 0) + row.estimate;
-      if (row.actual !== null) project.actual = (project.actual ?? 0) + row.actual;
-    }
   }
+  // The same figure for the whole project, over all the leaf tasks, for the number properties that add up.
+  for (const prop of properties) if (prop.aggregate) project.totals[prop.name] = aggregateOf(prop.aggregate, leafNumbers(prop, 0, tasks.length));
   return { rows, byId: new Map(rows.map((row) => [row.id, row])), project };
 }
 
@@ -396,9 +523,10 @@ function allowKeys(op, allowed) {
   }
 }
 
-function readPatch(op) {
+function readPatch(op, d) {
   const patch = {};
-  for (const key of [...TASK_FIELDS, 'end']) if (op[key] !== undefined) patch[key] = FIELD[key](op[key], key);
+  for (const key of [...TASK_FIELDS.filter((field) => field !== 'props'), 'end']) if (op[key] !== undefined) patch[key] = FIELD[key](op[key], key);
+  if (op.props !== undefined) patch.props = readValues(op.props, d.project.properties, 'props');
   return patch;
 }
 
@@ -541,10 +669,17 @@ function slideTasks(d, ids, days, cal) {
 function patchTask(d, i, patch, cal) {
   const task = d.tasks[i];
   if (patch.end !== undefined && patch.duration !== undefined) fail('invalid_input', 'err.endAndDuration');
-  const derived = ['start', 'end', 'duration', 'progress', 'estimate', 'actual', 'predecessors'].filter((key) => patch[key] !== undefined);
+  const adding = new Set(d.project.properties.filter((prop) => prop.aggregate).map((prop) => prop.name));
+  const derived = ['start', 'end', 'duration', 'progress', 'predecessors'].filter((key) => patch[key] !== undefined);
+  // A parent has no value of its own for a property that adds up the tasks under it.
+  for (const name of Object.keys(patch.props ?? {})) if (adding.has(name)) derived.push(name);
   if (patch.milestone === true) derived.push('milestone');
   if (derived.length && isSummary(d.tasks, i)) fail('summary_field', 'err.summaryField', { name: task.name, fields: derived.join(', ') });
-  for (const key of ['name', 'resources', 'color', 'note', 'collapsed', 'milestone', 'progress', 'estimate', 'actual', 'due']) if (patch[key] !== undefined) task[key] = patch[key];
+  for (const key of ['name', 'resources', 'color', 'note', 'collapsed', 'milestone', 'progress', 'due']) if (patch[key] !== undefined) task[key] = patch[key];
+  for (const [name, value] of Object.entries(patch.props ?? {})) {
+    if (value === null) delete task.props[name];
+    else task.props[name] = value;
+  }
   // A milestone is a point in time: one working day.
   if (task.milestone && ((patch.duration !== undefined && patch.duration !== 1) || patch.end !== undefined)) fail('invalid_input', 'err.milestoneDuration', { name: task.name });
   if (patch.milestone === true) task.duration = 1;
@@ -592,7 +727,13 @@ function saveVersion(d, name, now) {
   return version;
 }
 
-export const OPS = ['add', 'update', 'delete', 'duplicate', 'move', 'indent', 'outdent', 'shift', 'slide', 'tighten', 'project', 'save_version', 'restore_version', 'delete_version'];
+export const OPS = ['add', 'update', 'delete', 'duplicate', 'move', 'indent', 'outdent', 'shift', 'slide', 'tighten', 'project', 'add_property', 'update_property', 'delete_property', 'save_version', 'restore_version', 'delete_version'];
+
+const propertyIndex = (d, name, what = 'name') => {
+  const at = typeof name === 'string' ? d.project.properties.findIndex((prop) => prop.name === name) : -1;
+  if (at < 0) fail('not_found', 'err.propertyNotFound', { what, name: JSON.stringify(name) });
+  return at;
+};
 
 function runOp(d, op, ctx) {
   if (!isObject(op) || typeof op.op !== 'string') fail('invalid_input', 'err.opShape');
@@ -608,7 +749,7 @@ function runOp(d, op, ctx) {
         if (d.tasks.some((task) => task.id === op.id)) fail('invalid_input', 'err.idUsed', { id: op.id });
         id = op.id;
       }
-      const patch = readPatch(op);
+      const patch = readPatch(op, d);
       const at = resolveTarget(d, op);
       const task = blankTask(id);
       task.name = patch.name ?? t('task.new');
@@ -623,7 +764,7 @@ function runOp(d, op, ctx) {
     }
     case 'update': {
       allowKeys(op, ['op', 'id', 'end', ...TASK_FIELDS]);
-      const adjusted = patchTask(d, findIndex(d, op.id, 'id'), readPatch(op), cal);
+      const adjusted = patchTask(d, findIndex(d, op.id, 'id'), readPatch(op, d), cal);
       return { op: 'update', id: op.id, ...(adjusted && { adjusted }) };
     }
     case 'slide': {
@@ -750,6 +891,55 @@ function runOp(d, op, ctx) {
       if (op.weekStart !== undefined) d.project.weekStart = FIELD.weekStart(op.weekStart, 'weekStart');
       return { op: 'project' };
     }
+    case 'add_property': {
+      allowKeys(op, ['op', 'name', 'type', 'options', 'unit', 'aggregate']);
+      if (d.project.properties.length >= MAX_PROPERTIES) fail('invalid_input', 'err.maxProperties', { max: MAX_PROPERTIES });
+      const { op: _name, ...definition } = op;
+      const prop = checkProperty(definition);
+      if (d.project.properties.some((item) => item.name === prop.name)) fail('invalid_input', 'err.propertyUsed', { name: prop.name });
+      d.project.properties.push(prop);
+      return { op: 'add_property', name: prop.name };
+    }
+    case 'update_property': {
+      // The type stays; everything else can change. null takes a unit or a way of adding up away.
+      allowKeys(op, ['op', 'name', 'newName', 'options', 'unit', 'aggregate']);
+      const at = propertyIndex(d, op.name);
+      const old = d.project.properties[at];
+      const draft = { ...old, ...(op.newName !== undefined && { name: op.newName }) };
+      for (const key of ['options', 'unit', 'aggregate']) {
+        if (op[key] === undefined) continue;
+        if (op[key] === null && key !== 'options') delete draft[key];
+        else draft[key] = op[key];
+      }
+      const next = checkProperty(draft);
+      if (next.name !== old.name && d.project.properties.some((item) => item.name === next.name)) fail('invalid_input', 'err.propertyUsed', { name: next.name });
+      if (old.type === 'select') {
+        for (const option of old.options.filter((item) => !next.options.includes(item))) {
+          const count = d.tasks.filter((task) => task.props[old.name] === option).length;
+          if (count) fail('invalid_input', 'err.optionInUse', { option, count });
+        }
+      }
+      d.project.properties[at] = next;
+      if (next.name !== old.name) {
+        for (const task of d.tasks) {
+          if (task.props[old.name] === undefined) continue;
+          task.props[next.name] = task.props[old.name];
+          delete task.props[old.name];
+        }
+      }
+      return { op: 'update_property', name: next.name };
+    }
+    case 'delete_property': {
+      allowKeys(op, ['op', 'name']);
+      const [gone] = d.project.properties.splice(propertyIndex(d, op.name), 1);
+      let cleared = 0;
+      for (const task of d.tasks) {
+        if (task.props[gone.name] === undefined) continue;
+        delete task.props[gone.name];
+        cleared++;
+      }
+      return { op: 'delete_property', name: gone.name, cleared };
+    }
     case 'save_version': {
       allowKeys(op, ['op', 'name']);
       if (op.name !== undefined && (typeof op.name !== 'string' || op.name.length > 200)) bad('name', 'expect.name200');
@@ -850,12 +1040,12 @@ export function describe(doc, { includeVersions = false } = {}) {
       holidays: doc.project.holidays,
       extraWorkdays: doc.project.extraWorkdays,
       weekStart: doc.project.weekStart,
+      properties: doc.project.properties,
       start: project.startDay === null ? null : formatDate(project.startDay),
       end: project.endDay === null ? null : formatDate(project.endDay),
       workingDays: project.duration,
       progress: round2(project.progress),
-      estimate: project.estimate,
-      actual: project.actual,
+      ...(Object.keys(project.totals).length && { totals: project.totals }),
       taskCount: project.count,
     },
     tasks: doc.tasks.map((task, i) => ({
@@ -869,9 +1059,8 @@ export function describe(doc, { includeVersions = false } = {}) {
       end: formatDate(rows[i].endDay),
       duration: rows[i].duration,
       progress: Math.round(rows[i].progress),
-      estimate: rows[i].estimate,
-      actual: rows[i].actual,
       resources: task.resources,
+      props: Object.fromEntries(Object.entries(rows[i].props).filter(([, value]) => value !== null)),
       color: task.color,
       predecessors: task.predecessors,
       note: task.note,

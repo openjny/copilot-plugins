@@ -1,7 +1,7 @@
 import { CanvasError, createCanvas, joinSession } from '@github/copilot-sdk/extension';
 import { Chart } from './lib/chart.mjs';
 import { resolveLocale, setLocale, t } from './lib/i18n.mjs';
-import { COLORS, MAX_LAG, ModelError, OPS, describe } from './lib/model.mjs';
+import { AGGREGATES, COLORS, MAX_LAG, ModelError, OPS, PROPERTY_TYPES, describe } from './lib/model.mjs';
 import { CANVAS_ID, loadLocale } from './lib/store.mjs';
 
 let session;
@@ -67,15 +67,14 @@ function chartView(chart, extra = {}) {
 
 const idProperty = { type: 'string', description: 'Task id, as listed by get_chart (letters, digits, "_" and "-", up to 32 characters).' };
 const taskFields = {
-  name: { type: 'string', description: 'Task name. For "project" and "save_version" it is the project or version name.' },
+  name: { type: 'string', description: 'Task name. For "project" and "save_version" it is the project or version name; for the property ops, the name of the property.' },
   start: { type: 'string', description: 'The day the task is placed, YYYY-MM-DD (a weekend or holiday moves to the next working day). Predecessors only set the earliest day it may start: a date before they allow becomes the first day they allow (the op result reports it in "adjusted.start"), and a later date is kept (the gap stays; lags are not changed). A new task given predecessors and no start is placed right after them.' },
   due: { type: ['string', 'null'], description: 'Deadline, YYYY-MM-DD; null clears it. A task that ends after it is reported with lateDays (and marked late on the page).' },
   end: { type: 'string', description: 'Last day, YYYY-MM-DD; sets the duration. Do not combine with duration.' },
   duration: { type: ['integer', 'string'], description: 'Working days: 3, "3d" or "2w" (a week is 5 working days). Do not combine with end.' },
   progress: { type: 'number', minimum: 0, maximum: 100, description: 'Percent complete. Not for a parent task: it is computed from its children.' },
   milestone: { type: 'boolean', description: 'true makes the task a milestone: a point in time shown as a diamond, one working day long. Not for a parent task.' },
-  estimate: { type: ['number', 'null'], description: 'Estimated effort in hours; null clears it. Not for a parent task: it is the sum of its children.' },
-  actual: { type: ['number', 'null'], description: 'Actual effort in hours so far; null clears it. Not for a parent task: it is the sum of its children.' },
+  props: { type: 'object', description: 'Values of the properties the project defines (see project.properties in get_chart), keyed by the name of the property, for example {"Estimated hours": 8, "Category": "Design"}. Only the keys given are changed; null clears one. A value suits the type: number (a number), text (a string), date (YYYY-MM-DD), select (one of the options), tags (an array of strings), checkbox (true / false), url (http or https). Not for a parent task when the property adds up (aggregate): the parent shows the sum of its children.', additionalProperties: true },
   resources: { type: 'array', items: { type: 'string' }, description: 'People or teams assigned.' },
   color: { type: 'string', enum: COLORS, description: 'Color label of the bar. "inherit" (the default) takes the color of the parent task, or blue when no parent has one; a color on a parent is the default for the tasks under it, and setting it clears the colors of the tasks under it.' },
   note: { type: 'string', description: 'Free-text memo.' },
@@ -102,6 +101,11 @@ const opSchema = {
     holidays: { type: 'array', items: { type: 'string' }, description: 'project: the days off besides the weekly days off (YYYY-MM-DD); replaces the list.' },
     extraWorkdays: { type: 'array', items: { type: 'string' }, description: 'project: days (YYYY-MM-DD) that are worked although they would be off (a weekly day off); replaces the list.' },
     weekStart: { type: 'string', enum: ['mon', 'sun'], description: 'project: the day weeks start on in the timeline (default "mon").' },
+    type: { type: 'string', enum: PROPERTY_TYPES, description: 'add_property: what the property holds. It cannot be changed later.' },
+    newName: { type: 'string', description: 'update_property: a new name for the property (its values keep with it).' },
+    options: { type: 'array', items: { type: 'string' }, description: 'add_property / update_property: the choices of a select property (different, up to 50 characters each). An option that tasks use cannot be removed.' },
+    unit: { type: ['string', 'null'], description: 'add_property / update_property: shown after the numbers of a number property, for example "h"; null (or "") removes it.' },
+    aggregate: { type: ['string', 'null'], enum: [...AGGREGATES, null], description: 'add_property / update_property, number properties: a parent task shows the sum / avg / min / max of the leaf tasks under it instead of a value of its own (null stops that). The totals for the whole project are in project.totals.' },
     ...taskFields,
   },
   required: ['op'],
@@ -153,7 +157,7 @@ const ganttChart = createCanvas({
             type: 'array',
             minItems: 1,
             maxItems: 200,
-            description: 'Edits, applied in order. add {name, parent|after|before, start, end|duration, progress, milestone, estimate, actual, due, resources, color, predecessors, id}; update {id, ...fields}; delete {id, reconnect} (with its children; reconnect joins the tasks before and after it); tighten {ids} starts tasks on the first day their predecessors allow, closing gaps (the result has \"count\"); duplicate {id} (copies a task with its children right after it; the result has "copy", the id of the new task); move {id, parent|after|before}; indent/outdent {id}; shift {id, direction}; slide {ids, days} moves tasks together by working days; project {name, weeklyOff, holidays, extraWorkdays, weekStart}; save_version {name} saves a version; restore_version {id}; delete_version {id}.',
+            description: 'Edits, applied in order. add {name, parent|after|before, start, end|duration, progress, milestone, due, resources, color, predecessors, props, id}; update {id, ...fields}; delete {id, reconnect} (with its children; reconnect joins the tasks before and after it); tighten {ids} starts tasks on the first day their predecessors allow, closing gaps (the result has \"count\"); duplicate {id} (copies a task with its children right after it; the result has "copy", the id of the new task); move {id, parent|after|before}; indent/outdent {id}; shift {id, direction}; slide {ids, days} moves tasks together by working days; project {name, weeklyOff, holidays, extraWorkdays, weekStart}; add_property {name, type, options, unit, aggregate} adds a property to the project (a field the tasks can hold, set with update.props); update_property {name, newName, options, unit, aggregate}; delete_property {name} (its values go too); save_version {name} saves a version; restore_version {id}; delete_version {id}.',
             items: opSchema,
           },
         },
