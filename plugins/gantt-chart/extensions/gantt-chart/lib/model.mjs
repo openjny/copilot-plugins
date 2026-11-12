@@ -1,27 +1,33 @@
-// Pure chart model shared by the extension (Node) and the page (browser): dates, working-day
-// calendar, validation, scheduling and edit operations. It must not import anything.
+// Pure chart model shared by the extension (Node) and the page (browser): dates, working-day calendar, field
+// validation, scheduling and edit operations. It imports only the message catalog.
+
+import { t } from './i18n.mjs';
 
 export const FORMAT = 'openjny-gantt-chart';
-export const VERSION = 1;
+export const VERSION = 2;
 export const COLORS = ['none', 'green', 'orange', 'red', 'purple', 'teal', 'gray'];
 export const MAX_LEVEL = 8;
-export const MAX_SNAPSHOTS = 100;
-const MAX_TASKS = 2000;
-const MAX_DURATION = 3650;
-const MAX_LAG = 999;
-const ID_RE = /^[A-Za-z0-9_-]{1,32}$/;
-const TASK_FIELDS = ['name', 'start', 'duration', 'progress', 'effort', 'resources', 'color', 'note', 'collapsed', 'predecessors'];
+export const MAX_VERSIONS = 100;
+export const MAX_TASKS = 2000;
+export const MAX_DURATION = 3650;
+export const MAX_LAG = 999;
+export const ID_RE = /^[A-Za-z0-9_-]{1,32}$/;
+const TASK_FIELDS = ['name', 'start', 'duration', 'progress', 'effort', 'resources', 'color', 'note', 'collapsed', 'milestone', 'predecessors'];
 
+/** An error with a code for programs and a message in the current language (key and params let a caller say it again). */
 export class ModelError extends Error {
-  constructor(code, message) {
+  constructor(code, message, key, params) {
     super(message);
     this.name = 'ModelError';
     this.code = code;
+    this.key = key;
+    this.params = params;
   }
 }
 
-const fail = (code, message) => {
-  throw new ModelError(code, message);
+/** Throws a ModelError whose message is the catalog entry `key` filled in with `params`. */
+export const fail = (code, key, params = {}) => {
+  throw new ModelError(code, t(key, params), key, params);
 };
 const isObject = (value) => value !== null && typeof value === 'object' && !Array.isArray(value);
 const round2 = (value) => Math.round(value * 100) / 100;
@@ -73,7 +79,7 @@ export function makeCalendar(project) {
       current += direction;
       if (isWorkday(current)) return current;
     }
-    return fail('invalid_input', '稼働日が見つかりません。休日の指定を確認してください。');
+    return fail('invalid_input', 'err.noWorkday');
   };
   const next = (day) => (isWorkday(day) ? day : step(day, 1));
   const prev = (day) => (isWorkday(day) ? day : step(day, -1));
@@ -117,15 +123,16 @@ export const isSummary = (tasks, i) => i + 1 < tasks.length && tasks[i + 1].leve
 
 // ---- Field validation, shared by file loading and edit operations ----------------------------------------
 
-const bad = (what, expect) => fail('invalid_input', `${what} は${expect}で指定してください。`);
+/** Throws "<what> must be <expect>", where `expect` is the catalog entry `expectKey`. */
+const bad = (what, expectKey, params = {}) => fail('invalid_input', 'err.expect', { what, expect: t(expectKey, params) });
 
 const FIELD = {
   name(value, what) {
-    if (typeof value !== 'string' || !value.trim() || value.length > 200) bad(what, '1〜200 文字の文字列');
+    if (typeof value !== 'string' || !value.trim() || value.length > 200) bad(what, 'expect.name');
     return value.trim();
   },
   start(value, what) {
-    if (parseDate(value) === null) bad(what, 'YYYY-MM-DD 形式の日付（1970〜2200 年）');
+    if (parseDate(value) === null) bad(what, 'expect.date');
     return value;
   },
   end(value, what) {
@@ -133,61 +140,63 @@ const FIELD = {
   },
   duration(value, what) {
     const days = parseDuration(value);
-    if (days === null) bad(what, `1〜${MAX_DURATION} の稼働日数（整数、または "3d" "2w"）`);
+    if (days === null) bad(what, 'expect.duration', { max: MAX_DURATION });
     return days;
   },
   progress(value, what) {
-    if (typeof value !== 'number' || !Number.isFinite(value) || value < 0 || value > 100) bad(what, '0〜100 の数値');
+    if (typeof value !== 'number' || !Number.isFinite(value) || value < 0 || value > 100) bad(what, 'expect.progress');
     return Math.round(value);
   },
   effort(value, what) {
     if (value === null) return null;
-    if (typeof value !== 'number' || !Number.isFinite(value) || value < 0 || value > 1e6) bad(what, '0 以上の数値（または null）');
+    if (typeof value !== 'number' || !Number.isFinite(value) || value < 0 || value > 1e6) bad(what, 'expect.effort');
     return round2(value);
   },
   resources(value, what) {
     const list = Array.isArray(value) ? value : typeof value === 'string' ? value.split(/[,、]/) : null;
-    if (!list || list.some((item) => typeof item !== 'string')) bad(what, '文字列の配列（またはカンマ区切りの文字列）');
+    if (!list || list.some((item) => typeof item !== 'string')) bad(what, 'expect.resources');
     const names = [...new Set(list.map((item) => item.trim()).filter(Boolean))];
-    if (names.length > 20 || names.some((item) => item.length > 50)) bad(what, '50 文字以内・最大 20 件');
+    if (names.length > 20 || names.some((item) => item.length > 50)) bad(what, 'expect.resourcesLimit');
     return names;
   },
   color(value, what) {
-    if (!COLORS.includes(value)) bad(what, `次のいずれか（${COLORS.join(', ')}）`);
+    if (!COLORS.includes(value)) bad(what, 'expect.color', { list: COLORS.join(', ') });
     return value;
   },
   note(value, what) {
-    if (typeof value !== 'string' || value.length > 2000) bad(what, '2000 文字以内の文字列');
+    if (typeof value !== 'string' || value.length > 2000) bad(what, 'expect.note');
     return value;
   },
   collapsed(value, what) {
-    if (typeof value !== 'boolean') bad(what, '真偽値');
+    if (typeof value !== 'boolean') bad(what, 'expect.boolean');
+    return value;
+  },
+  milestone(value, what) {
+    if (typeof value !== 'boolean') bad(what, 'expect.boolean');
     return value;
   },
   predecessors(value, what) {
-    if (!Array.isArray(value) || value.length > 50) bad(what, '先行タスクの配列（最大 50 件）');
+    if (!Array.isArray(value) || value.length > 50) bad(what, 'expect.predecessors');
     const seen = new Set();
     return value.map((item, i) => {
       const where = `${what}[${i}]`;
-      if (!isObject(item)) bad(where, '{ task, lag } のオブジェクト');
-      for (const key of Object.keys(item)) if (key !== 'task' && key !== 'lag') fail('invalid_input', `${where} に未知の項目 "${key}" があります。`);
-      if (typeof item.task !== 'string' || !ID_RE.test(item.task)) bad(`${where}.task`, 'タスク ID');
-      if (seen.has(item.task)) fail('invalid_input', `${where}: 先行タスク ${item.task} が重複しています。`);
+      if (!isObject(item)) bad(where, 'expect.pred');
+      for (const key of Object.keys(item)) if (key !== 'task' && key !== 'lag') fail('invalid_input', 'err.unknownProp', { where, key });
+      if (typeof item.task !== 'string' || !ID_RE.test(item.task)) bad(`${where}.task`, 'expect.taskId');
+      if (seen.has(item.task)) fail('invalid_input', 'err.dupPred', { where, task: item.task });
       seen.add(item.task);
       const lag = item.lag === undefined ? 0 : item.lag;
-      if (!Number.isInteger(lag) || lag < 0 || lag > MAX_LAG) bad(`${where}.lag`, `0〜${MAX_LAG} の整数（稼働日。先行タスクの終了前には開始できません）`);
+      if (!Number.isInteger(lag) || lag < 0 || lag > MAX_LAG) bad(`${where}.lag`, 'expect.lag', { max: MAX_LAG });
       return { task: item.task, lag };
     });
   },
   holidays(value, what) {
-    if (!Array.isArray(value) || value.length > 500 || value.some((item) => parseDate(item) === null)) {
-      bad(what, 'YYYY-MM-DD 形式の日付の配列（最大 500 件）');
-    }
+    if (!Array.isArray(value) || value.length > 500 || value.some((item) => parseDate(item) === null)) bad(what, 'expect.holidays');
     return [...new Set(value)].sort();
   },
 };
 
-const blankTask = (id) => ({
+export const blankTask = (id) => ({
   id,
   name: '',
   level: 0,
@@ -200,90 +209,21 @@ const blankTask = (id) => ({
   predecessors: [],
   note: '',
   collapsed: false,
+  milestone: false,
 });
 
-// ---- Reading a document -----------------------------------------------------------------------------------
-
-function readTasks(raw, where) {
-  if (!Array.isArray(raw)) fail('invalid_file', `${where} が配列ではありません。`);
-  if (raw.length > MAX_TASKS) fail('invalid_file', `${where} は ${MAX_TASKS} 件までです。`);
-  const ids = new Set();
-  return raw.map((item, i) => {
-    const at = `${where}[${i}]`;
-    try {
-      if (!isObject(item)) fail('invalid_file', `${at} がオブジェクトではありません。`);
-      if (typeof item.id !== 'string' || !ID_RE.test(item.id)) fail('invalid_file', `${at}.id は英数字・_・- の 1〜32 文字で指定してください。`);
-      if (ids.has(item.id)) fail('invalid_file', `${at}.id "${item.id}" が重複しています。`);
-      ids.add(item.id);
-      const task = blankTask(item.id);
-      if (typeof item.name !== 'string') fail('invalid_file', `${at}.name は文字列で指定してください。`);
-      task.name = item.name.trim().slice(0, 200);
-      if (!Number.isInteger(item.level) || item.level < 0 || item.level > MAX_LEVEL) fail('invalid_file', `${at}.level は 0〜${MAX_LEVEL} の整数で指定してください。`);
-      task.level = item.level;
-      for (const key of TASK_FIELDS) {
-        if (key === 'name') continue;
-        if (item[key] === undefined) {
-          if (key === 'start' || key === 'duration') fail('invalid_file', `${at}.${key} がありません。`);
-          continue;
-        }
-        task[key] = FIELD[key](item[key], `${at}.${key}`);
-      }
-      return task;
-    } catch (error) {
-      throw error instanceof ModelError ? new ModelError('invalid_file', error.message) : error;
-    }
-  });
-}
-
-function readProject(raw, where = 'project') {
-  if (!isObject(raw)) fail('invalid_file', `${where} がオブジェクトではありません。`);
-  const name = typeof raw.name === 'string' ? raw.name.trim().slice(0, 200) : '';
-  try {
-    return { name, holidays: raw.holidays === undefined ? [] : FIELD.holidays(raw.holidays, `${where}.holidays`) };
-  } catch (error) {
-    throw error instanceof ModelError ? new ModelError('invalid_file', error.message) : error;
-  }
-}
-
-function readSnapshots(raw) {
-  if (raw === undefined) return [];
-  if (!Array.isArray(raw) || raw.length > MAX_SNAPSHOTS) fail('invalid_file', `snapshots は ${MAX_SNAPSHOTS} 件以内の配列にしてください。`);
-  const ids = new Set();
-  return raw.map((item, i) => {
-    const at = `snapshots[${i}]`;
-    if (!isObject(item)) fail('invalid_file', `${at} がオブジェクトではありません。`);
-    if (typeof item.id !== 'string' || !ID_RE.test(item.id) || ids.has(item.id)) fail('invalid_file', `${at}.id が不正または重複しています。`);
-    ids.add(item.id);
-    if (typeof item.name !== 'string' || Number.isNaN(Date.parse(item.createdAt))) fail('invalid_file', `${at} の name / createdAt が不正です。`);
-    const tasks = readTasks(item.tasks, `${at}.tasks`);
-    checkTasks(tasks, `${at}.tasks`, 'invalid_file');
-    return { id: item.id, name: item.name.slice(0, 200), createdAt: item.createdAt, project: readProject(item.project, `${at}.project`), tasks };
-  });
-}
-
-/** Parses the content of a chart file. */
-export function readDoc(raw) {
-  if (!isObject(raw)) fail('invalid_file', 'JSON のルートがオブジェクトではありません。');
-  if (raw.format !== FORMAT) fail('invalid_file', `ガントチャートのファイルではありません（format が "${FORMAT}" ではありません）。`);
-  if (raw.version !== VERSION) fail('unsupported_version', `version ${JSON.stringify(raw.version)} には未対応です（対応: ${VERSION}）。`);
-  const doc = { format: FORMAT, version: VERSION, project: readProject(raw.project), tasks: readTasks(raw.tasks, 'tasks'), snapshots: readSnapshots(raw.snapshots) };
-  finalize(doc, 'invalid_file');
-  return doc;
-}
-
 export function emptyDoc(name = '') {
-  return { format: FORMAT, version: VERSION, project: { name: name.slice(0, 200), holidays: [] }, tasks: [], snapshots: [] };
+  return { format: FORMAT, version: VERSION, project: { name: name.slice(0, 200), holidays: [] }, tasks: [], versions: [] };
 }
 
-function checkTasks(tasks, where, code) {
+/** Checks the outline (the first task is at level 0, a level rises by at most 1) and the predecessors of a flat task list. */
+export function checkTasks(tasks, where, code) {
   const ids = new Set(tasks.map((task) => task.id));
   tasks.forEach((task, i) => {
-    if (i === 0 ? task.level !== 0 : task.level > tasks[i - 1].level + 1) {
-      fail(code, `${where}[${i}]（「${task.name}」）の level が不正です。最初のタスクは 0、以降は直前のタスクの level + 1 以下にしてください。`);
-    }
+    if (i === 0 ? task.level !== 0 : task.level > tasks[i - 1].level + 1) fail(code, 'err.badLevel', { where: `${where}[${i}]`, name: task.name });
     for (const pred of task.predecessors) {
-      if (pred.task === task.id) fail(code, `「${task.name}」が自分自身を先行タスクにしています。`);
-      if (!ids.has(pred.task)) fail(code, `「${task.name}」の先行タスク ${pred.task} が存在しません。`);
+      if (pred.task === task.id) fail(code, 'err.selfPred', { name: task.name });
+      if (!ids.has(pred.task)) fail(code, 'err.missingPred', { name: task.name, task: pred.task });
     }
   });
 }
@@ -295,7 +235,10 @@ function checkTasks(tasks, where, code) {
 export function finalize(doc, code = 'invalid_input') {
   checkTasks(doc.tasks, 'tasks', code);
   doc.tasks.forEach((task, i) => {
-    if (isSummary(doc.tasks, i)) task.predecessors = [];
+    if (isSummary(doc.tasks, i)) {
+      task.predecessors = [];
+      task.milestone = false;
+    }
   });
   const result = schedule(doc);
   doc.tasks.forEach((task, i) => {
@@ -324,7 +267,7 @@ export function schedule(doc, cal = makeCalendar(doc.project)) {
 
   const resolve = (i) => {
     if (mark[i] === 2) return rows[i];
-    if (mark[i] === 1) fail('cycle', `先行タスクが循環しています（「${tasks[i].name}」）。`);
+    if (mark[i] === 1) fail('cycle', 'err.cycle', { name: tasks[i].name });
     mark[i] = 1;
     const task = tasks[i];
     const end = subtreeEnd(tasks, i);
@@ -343,20 +286,21 @@ export function schedule(doc, cal = makeCalendar(doc.project)) {
         done += sub.done;
         if (sub.effort !== null) effort = (effort ?? 0) + sub.effort;
       }
-      row = { summary: true, startDay, endDay, duration: cal.count(startDay, endDay), progress: work ? done / work : 0, effort, work, done };
+      row = { summary: true, milestone: false, startDay, endDay, duration: cal.count(startDay, endDay), progress: work ? done / work : 0, effort, work, done };
     } else {
       let startDay = cal.next(parseDate(task.start));
       if (task.predecessors.length) {
         startDay = null;
         for (const pred of task.predecessors) {
           const at = index.get(pred.task);
-          if (at === undefined) fail('invalid_input', `「${task.name}」の先行タスク ${pred.task} が存在しません。`);
+          if (at === undefined) fail('invalid_input', 'err.missingPred', { name: task.name, task: pred.task });
           const candidate = cal.add(resolve(at).endDay, 1 + pred.lag);
           if (startDay === null || candidate > startDay) startDay = candidate;
         }
       }
       row = {
         summary: false,
+        milestone: task.milestone === true,
         startDay,
         endDay: cal.add(startDay, task.duration - 1),
         duration: task.duration,
@@ -399,13 +343,13 @@ export function schedule(doc, cal = makeCalendar(doc.project)) {
 
 function findIndex(d, id, what) {
   const i = typeof id === 'string' ? d.tasks.findIndex((task) => task.id === id) : -1;
-  if (i < 0) fail('not_found', `${what}: タスク ${JSON.stringify(id)} が見つかりません。`);
+  if (i < 0) fail('not_found', 'err.taskNotFound', { what, id: JSON.stringify(id) });
   return i;
 }
 
 function allowKeys(op, allowed) {
   for (const key of Object.keys(op)) {
-    if (!allowed.includes(key)) fail('invalid_input', `未知の項目 "${key}" があります（使用できる項目: ${allowed.join(', ')}）。`);
+    if (!allowed.includes(key)) fail('invalid_input', 'err.unknownKey', { key, allowed: allowed.join(', ') });
   }
 }
 
@@ -415,25 +359,27 @@ function readPatch(op) {
   return patch;
 }
 
-function newId(d) {
+function maxTaskNumber(d) {
   let max = 0;
   for (const task of d.tasks) {
     const match = /^t(\d+)$/.exec(task.id);
     if (match) max = Math.max(max, Number(match[1]));
   }
-  return `t${max + 1}`;
+  return max;
 }
+
+const newId = (d) => `t${maxTaskNumber(d) + 1}`;
 
 /** Where a task goes: as the last child of `parent`, after or before another task, or at the end. */
 function resolveTarget(d, op) {
   const given = ['parent', 'after', 'before'].filter((key) => op[key] !== undefined);
-  if (given.length > 1) fail('invalid_input', 'parent / after / before は 1 つだけ指定できます。');
+  if (given.length > 1) fail('invalid_input', 'err.oneTarget');
   if (!given.length) return { index: d.tasks.length, level: 0 };
   const key = given[0];
   const i = findIndex(d, op[key], key);
   const level = d.tasks[i].level;
   if (key === 'parent') {
-    if (level + 1 > MAX_LEVEL) fail('invalid_input', `階層は ${MAX_LEVEL + 1} 段までです。`);
+    if (level + 1 > MAX_LEVEL) fail('invalid_input', 'err.maxDepth', { max: MAX_LEVEL + 1 });
     return { index: subtreeEnd(d.tasks, i), level: level + 1 };
   }
   return key === 'after' ? { index: subtreeEnd(d.tasks, i), level } : { index: i, level };
@@ -442,7 +388,7 @@ function resolveTarget(d, op) {
 function shiftLevels(tasks, from, to, delta) {
   for (let i = from; i < to; i++) {
     const level = tasks[i].level + delta;
-    if (level < 0 || level > MAX_LEVEL) fail('invalid_input', `階層は 0〜${MAX_LEVEL} の範囲にしてください。`);
+    if (level < 0 || level > MAX_LEVEL) fail('invalid_input', 'err.levelRange', { max: MAX_LEVEL });
     tasks[i].level = level;
   }
 }
@@ -466,7 +412,7 @@ function setStart(d, i, wanted, cal) {
     // A predecessor that does not decide the start would go below 0; it stays at 0 and still ends before the start.
     task.predecessors = task.predecessors.map((pred) => {
       const lag = Math.max(0, pred.lag + delta);
-      if (lag > MAX_LAG) fail('invalid_input', `ラグが ${MAX_LAG} を超えます。`);
+      if (lag > MAX_LAG) fail('invalid_input', 'err.lagOver', { max: MAX_LAG });
       return { task: pred.task, lag };
     });
   }
@@ -564,19 +510,21 @@ function slideTasks(d, ids, days, cal) {
 
 function patchTask(d, i, patch, cal) {
   const task = d.tasks[i];
-  if (patch.end !== undefined && patch.duration !== undefined) fail('invalid_input', 'end と duration は同時に指定できません。');
+  if (patch.end !== undefined && patch.duration !== undefined) fail('invalid_input', 'err.endAndDuration');
   const derived = ['start', 'end', 'duration', 'progress', 'effort', 'predecessors'].filter((key) => patch[key] !== undefined);
-  if (derived.length && isSummary(d.tasks, i)) {
-    fail('summary_field', `「${task.name}」は子タスクを持つため ${derived.join(', ')} を変更できません（子タスクから自動で決まります）。`);
-  }
-  for (const key of ['name', 'resources', 'color', 'note', 'collapsed', 'progress', 'effort']) if (patch[key] !== undefined) task[key] = patch[key];
+  if (patch.milestone === true) derived.push('milestone');
+  if (derived.length && isSummary(d.tasks, i)) fail('summary_field', 'err.summaryField', { name: task.name, fields: derived.join(', ') });
+  for (const key of ['name', 'resources', 'color', 'note', 'collapsed', 'milestone', 'progress', 'effort']) if (patch[key] !== undefined) task[key] = patch[key];
+  // A milestone is a point in time: one working day.
+  if (task.milestone && ((patch.duration !== undefined && patch.duration !== 1) || patch.end !== undefined)) fail('invalid_input', 'err.milestoneDuration', { name: task.name });
+  if (patch.milestone === true) task.duration = 1;
   // A parent's color is the default for the tasks under it, so setting it recolors the whole group.
   if (patch.color !== undefined && isSummary(d.tasks, i)) {
     for (let j = i + 1, end = subtreeEnd(d.tasks, i); j < end; j++) d.tasks[j].color = 'none';
   }
   if (patch.predecessors !== undefined) {
     for (const pred of patch.predecessors) {
-      if (pred.task === task.id) fail('invalid_input', '自分自身を先行タスクにはできません。');
+      if (pred.task === task.id) fail('invalid_input', 'err.selfPredOp');
       findIndex(d, pred.task, 'predecessors');
     }
     task.predecessors = patch.predecessors;
@@ -589,9 +537,9 @@ function patchTask(d, i, patch, cal) {
   if (patch.end !== undefined) {
     const first = driven ? schedule(d, cal).rows[i].startDay : cal.next(parseDate(task.start));
     const last = cal.prev(parseDate(patch.end));
-    if (last < first) fail('invalid_range', `「${task.name}」の終了日が開始日より前です。`);
+    if (last < first) fail('invalid_range', 'err.endBeforeStart', { name: task.name });
     task.duration = cal.count(first, last);
-    if (task.duration > MAX_DURATION) fail('invalid_input', `期間は ${MAX_DURATION} 稼働日までです。`);
+    if (task.duration > MAX_DURATION) fail('invalid_input', 'err.maxDuration', { max: MAX_DURATION });
   }
   return adjusted;
 }
@@ -601,37 +549,39 @@ function localStamp(now) {
   return `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())} ${pad(now.getHours())}:${pad(now.getMinutes())}`;
 }
 
-function takeSnapshot(d, name, now) {
-  if (d.snapshots.length >= MAX_SNAPSHOTS) fail('too_many_versions', `バージョンは ${MAX_SNAPSHOTS} 件までです。古いバージョンを削除してください。`);
+function saveVersion(d, name, now) {
+  if (d.versions.length >= MAX_VERSIONS) fail('too_many_versions', 'err.tooManyVersions', { max: MAX_VERSIONS });
   finalize(d);
   let max = 0;
-  for (const snap of d.snapshots) {
-    const match = /^s(\d+)$/.exec(snap.id);
+  for (const version of d.versions) {
+    const match = /^v(\d+)$/.exec(version.id);
     if (match) max = Math.max(max, Number(match[1]));
   }
-  const snap = { id: `s${max + 1}`, name, createdAt: now.toISOString(), project: structuredClone(d.project), tasks: structuredClone(d.tasks) };
-  d.snapshots.push(snap);
-  return snap;
+  const version = { id: `v${max + 1}`, name, createdAt: now.toISOString(), project: structuredClone(d.project), tasks: structuredClone(d.tasks) };
+  d.versions.push(version);
+  return version;
 }
 
+export const OPS = ['add', 'update', 'delete', 'duplicate', 'move', 'indent', 'outdent', 'shift', 'slide', 'project', 'save_version', 'restore_version', 'delete_version'];
+
 function runOp(d, op, ctx) {
-  if (!isObject(op) || typeof op.op !== 'string') fail('invalid_input', 'op は { "op": "<name>", ... } の形で指定してください。');
+  if (!isObject(op) || typeof op.op !== 'string') fail('invalid_input', 'err.opShape');
   const now = ctx.now ?? new Date();
   const cal = makeCalendar(d.project);
   switch (op.op) {
     case 'add': {
       allowKeys(op, ['op', 'id', 'parent', 'after', 'before', 'end', ...TASK_FIELDS]);
-      if (d.tasks.length >= MAX_TASKS) fail('invalid_input', `タスクは ${MAX_TASKS} 件までです。`);
+      if (d.tasks.length >= MAX_TASKS) fail('invalid_input', 'err.maxTasks', { max: MAX_TASKS });
       let id = newId(d);
       if (op.id !== undefined) {
-        if (typeof op.id !== 'string' || !ID_RE.test(op.id)) bad('id', '英数字・_・- の 1〜32 文字');
-        if (d.tasks.some((task) => task.id === op.id)) fail('invalid_input', `id "${op.id}" は既に使われています。`);
+        if (typeof op.id !== 'string' || !ID_RE.test(op.id)) bad('id', 'expect.id');
+        if (d.tasks.some((task) => task.id === op.id)) fail('invalid_input', 'err.idUsed', { id: op.id });
         id = op.id;
       }
       const patch = readPatch(op);
       const at = resolveTarget(d, op);
       const task = blankTask(id);
-      task.name = patch.name ?? '新しいタスク';
+      task.name = patch.name ?? t('task.new');
       task.level = at.level;
       const above = at.index > 0 ? schedule(d, cal).rows[at.index - 1] : null;
       task.start = formatDate(above ? above.startDay : cal.next(todayDay(now)));
@@ -646,8 +596,8 @@ function runOp(d, op, ctx) {
     }
     case 'slide': {
       allowKeys(op, ['op', 'ids', 'days']);
-      if (!Array.isArray(op.ids) || !op.ids.length || op.ids.length > 500) bad('ids', 'タスク ID の配列（1〜500 件）');
-      if (!Number.isInteger(op.days) || Math.abs(op.days) > MAX_SLIDE) bad('days', `±${MAX_SLIDE} 以内の整数（稼働日）`);
+      if (!Array.isArray(op.ids) || !op.ids.length || op.ids.length > 500) bad('ids', 'expect.ids');
+      if (!Number.isInteger(op.days) || Math.abs(op.days) > MAX_SLIDE) bad('days', 'expect.days', { max: MAX_SLIDE });
       const moved = slideTasks(d, op.ids, op.days, cal);
       return { op: 'slide', ids: op.ids, days: moved, ...(moved !== op.days && { adjusted: { days: moved } }) };
     }
@@ -659,6 +609,23 @@ function runOp(d, op, ctx) {
       for (const task of d.tasks) task.predecessors = task.predecessors.filter((pred) => !gone.has(pred.task));
       return { op: 'delete', id: op.id, removed: removed.length };
     }
+    case 'duplicate': {
+      // Copies a task with everything under it, right after it. Dependencies among the copies point at the copies;
+      // the ones that leave the group stay as they were, so a copy waits for the same predecessors as the original.
+      allowKeys(op, ['op', 'id']);
+      const i = findIndex(d, op.id, 'id');
+      const end = subtreeEnd(d.tasks, i);
+      if (d.tasks.length + (end - i) > MAX_TASKS) fail('invalid_input', 'err.maxTasks', { max: MAX_TASKS });
+      const copy = structuredClone(d.tasks.slice(i, end));
+      let number = maxTaskNumber(d);
+      const renamed = new Map(copy.map((task) => [task.id, `t${++number}`]));
+      for (const task of copy) {
+        task.id = renamed.get(task.id);
+        task.predecessors = task.predecessors.map((pred) => ({ task: renamed.get(pred.task) ?? pred.task, lag: pred.lag }));
+      }
+      d.tasks.splice(end, 0, ...copy);
+      return { op: 'duplicate', id: op.id, copy: copy[0].id, ids: copy.map((task) => task.id) };
+    }
     case 'move': {
       allowKeys(op, ['op', 'id', 'parent', 'after', 'before']);
       const i = findIndex(d, op.id, 'id');
@@ -666,7 +633,7 @@ function runOp(d, op, ctx) {
       for (const key of ['parent', 'after', 'before']) {
         if (op[key] === undefined) continue;
         const at = findIndex(d, op[key], key);
-        if (at >= i && at < end) fail('invalid_move', '自分自身または自分の子孫の位置には移動できません。');
+        if (at >= i && at < end) fail('invalid_move', 'err.moveIntoSelf');
       }
       const block = d.tasks.splice(i, end - i);
       const at = resolveTarget(d, op);
@@ -677,30 +644,30 @@ function runOp(d, op, ctx) {
     case 'indent': {
       allowKeys(op, ['op', 'id']);
       const i = findIndex(d, op.id, 'id');
-      if (i === 0 || d.tasks[i - 1].level < d.tasks[i].level) fail('cannot_indent', '直前に同じ階層のタスクがないため、インデントできません。');
+      if (i === 0 || d.tasks[i - 1].level < d.tasks[i].level) fail('cannot_indent', 'err.cannotIndent');
       shiftLevels(d.tasks, i, subtreeEnd(d.tasks, i), 1);
       return { op: 'indent', id: op.id };
     }
     case 'outdent': {
       allowKeys(op, ['op', 'id']);
       const i = findIndex(d, op.id, 'id');
-      if (d.tasks[i].level === 0) fail('cannot_outdent', 'これ以上アウトデントできません。');
+      if (d.tasks[i].level === 0) fail('cannot_outdent', 'err.cannotOutdent');
       shiftLevels(d.tasks, i, subtreeEnd(d.tasks, i), -1);
       return { op: 'outdent', id: op.id };
     }
     case 'shift': {
       allowKeys(op, ['op', 'id', 'direction']);
-      if (op.direction !== 'up' && op.direction !== 'down') bad('direction', '"up" か "down"');
+      if (op.direction !== 'up' && op.direction !== 'down') bad('direction', 'expect.direction');
       const i = findIndex(d, op.id, 'id');
       const end = subtreeEnd(d.tasks, i);
       const level = d.tasks[i].level;
       if (op.direction === 'up') {
         let j = i - 1;
         while (j >= 0 && d.tasks[j].level > level) j--;
-        if (j < 0 || d.tasks[j].level < level) fail('cannot_move', '上に入れ替えられる同じ階層のタスクがありません。');
+        if (j < 0 || d.tasks[j].level < level) fail('cannot_move', 'err.cannotMoveUp');
         d.tasks.splice(j, 0, ...d.tasks.splice(i, end - i));
       } else {
-        if (end >= d.tasks.length || d.tasks[end].level < level) fail('cannot_move', '下に入れ替えられる同じ階層のタスクがありません。');
+        if (end >= d.tasks.length || d.tasks[end].level < level) fail('cannot_move', 'err.cannotMoveDown');
         const after = subtreeEnd(d.tasks, end);
         d.tasks.splice(after - (end - i), 0, ...d.tasks.splice(i, end - i));
       }
@@ -709,36 +676,36 @@ function runOp(d, op, ctx) {
     case 'project': {
       allowKeys(op, ['op', 'name', 'holidays']);
       if (op.name !== undefined) {
-        if (typeof op.name !== 'string' || op.name.length > 200) bad('name', '200 文字以内の文字列');
+        if (typeof op.name !== 'string' || op.name.length > 200) bad('name', 'expect.name200');
         d.project.name = op.name.trim();
       }
       if (op.holidays !== undefined) d.project.holidays = FIELD.holidays(op.holidays, 'holidays');
       return { op: 'project' };
     }
-    case 'snapshot': {
+    case 'save_version': {
       allowKeys(op, ['op', 'name']);
-      if (op.name !== undefined && (typeof op.name !== 'string' || op.name.length > 200)) bad('name', '200 文字以内の文字列');
-      const snap = takeSnapshot(d, op.name?.trim() || localStamp(now), now);
-      return { op: 'snapshot', id: snap.id };
+      if (op.name !== undefined && (typeof op.name !== 'string' || op.name.length > 200)) bad('name', 'expect.name200');
+      const version = saveVersion(d, op.name?.trim() || localStamp(now), now);
+      return { op: 'save_version', id: version.id };
     }
-    case 'restore': {
+    case 'restore_version': {
       allowKeys(op, ['op', 'id']);
-      const snap = d.snapshots.find((item) => item.id === op.id);
-      if (!snap) fail('not_found', `id: バージョン ${JSON.stringify(op.id)} が見つかりません。`);
-      takeSnapshot(d, `復元前（自動）${localStamp(now)}`, now);
-      d.project = structuredClone(snap.project);
-      d.tasks = structuredClone(snap.tasks);
-      return { op: 'restore', id: op.id };
+      const version = d.versions.find((item) => item.id === op.id);
+      if (!version) fail('not_found', 'err.versionNotFound', { id: JSON.stringify(op.id) });
+      saveVersion(d, t('version.beforeRestore', { stamp: localStamp(now) }), now);
+      d.project = structuredClone(version.project);
+      d.tasks = structuredClone(version.tasks);
+      return { op: 'restore_version', id: op.id };
     }
-    case 'delete_snapshot': {
+    case 'delete_version': {
       allowKeys(op, ['op', 'id']);
-      const at = d.snapshots.findIndex((item) => item.id === op.id);
-      if (at < 0) fail('not_found', `id: バージョン ${JSON.stringify(op.id)} が見つかりません。`);
-      d.snapshots.splice(at, 1);
-      return { op: 'delete_snapshot', id: op.id };
+      const at = d.versions.findIndex((item) => item.id === op.id);
+      if (at < 0) fail('not_found', 'err.versionNotFound', { id: JSON.stringify(op.id) });
+      d.versions.splice(at, 1);
+      return { op: 'delete_version', id: op.id };
     }
     default:
-      return fail('invalid_input', `未知の op "${op.op}" です（add, update, delete, move, indent, outdent, shift, slide, project, snapshot, restore, delete_snapshot）。`);
+      return fail('invalid_input', 'err.unknownOp', { op: op.op, ops: OPS.join(', ') });
   }
 }
 
@@ -747,13 +714,13 @@ function runOp(d, op, ctx) {
  * per operation (the id of an added task, for example).
  */
 export function applyOps(doc, ops, ctx = {}) {
-  if (!Array.isArray(ops) || ops.length === 0 || ops.length > 200) fail('invalid_input', 'ops は 1〜200 件の配列で指定してください。');
+  if (!Array.isArray(ops) || ops.length === 0 || ops.length > 200) fail('invalid_input', 'err.opsCount');
   const d = structuredClone(doc);
   const results = ops.map((op, i) => {
     try {
       return runOp(d, op, ctx);
     } catch (error) {
-      if (error instanceof ModelError) error.message = `ops[${i}]（${op?.op}）: ${error.message}`;
+      if (error instanceof ModelError) error.message = `ops[${i}] (${op?.op}): ${error.message}`;
       throw error;
     }
   });
@@ -762,33 +729,6 @@ export function applyOps(doc, ops, ctx = {}) {
 }
 
 // ---- Output --------------------------------------------------------------------------------------------------
-
-const compactTask = (task) => {
-  const out = { id: task.id, name: task.name, level: task.level, start: task.start, duration: task.duration, progress: task.progress };
-  if (task.effort !== null) out.effort = task.effort;
-  if (task.resources.length) out.resources = task.resources;
-  if (task.color !== 'none') out.color = task.color;
-  if (task.predecessors.length) out.predecessors = task.predecessors;
-  if (task.note) out.note = task.note;
-  if (task.collapsed) out.collapsed = true;
-  return out;
-};
-
-/** The file text: one line per task so that diffs and hand edits stay easy. */
-export function serializeDoc(doc) {
-  const lines = (list) => (list.length ? `[\n${list.map((item) => `    ${JSON.stringify(item)}`).join(',\n')}\n  ]` : '[]');
-  const snapshots = doc.snapshots.map((snap) => ({ id: snap.id, name: snap.name, createdAt: snap.createdAt, project: snap.project, tasks: snap.tasks.map(compactTask) }));
-  return [
-    '{',
-    `  "format": ${JSON.stringify(doc.format)},`,
-    `  "version": ${doc.version},`,
-    `  "project": ${JSON.stringify(doc.project)},`,
-    `  "tasks": ${lines(doc.tasks.map(compactTask))},`,
-    `  "snapshots": ${lines(snapshots)}`,
-    '}',
-    '',
-  ].join('\n');
-}
 
 /** What the agent sees: every task with its computed dates. */
 export function describe(doc, { includeVersions = false } = {}) {
@@ -810,6 +750,7 @@ export function describe(doc, { includeVersions = false } = {}) {
       name: task.name,
       level: task.level,
       isParent: rows[i].summary,
+      isMilestone: rows[i].milestone,
       start: formatDate(rows[i].startDay),
       end: formatDate(rows[i].endDay),
       duration: rows[i].duration,
@@ -822,6 +763,6 @@ export function describe(doc, { includeVersions = false } = {}) {
       collapsed: task.collapsed,
     })),
   };
-  if (includeVersions) out.versions = doc.snapshots.map((snap) => ({ id: snap.id, name: snap.name, createdAt: snap.createdAt, taskCount: snap.tasks.length }));
+  if (includeVersions) out.versions = doc.versions.map((version) => ({ id: version.id, name: version.name, createdAt: version.createdAt, taskCount: version.tasks.length }));
   return out;
 }

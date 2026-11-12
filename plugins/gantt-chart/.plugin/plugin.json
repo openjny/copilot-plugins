@@ -1,7 +1,7 @@
 {
   "name": "gantt-chart",
-  "version": "1.2.0",
-  "description": "A canvas with an editable Gantt chart saved in a JSON file: task table with parent tasks, timeline bars you can drag, dependencies, progress, color labels, resources and saved versions. The agent edits the same chart through actions.",
+  "version": "2.0.0",
+  "description": "A canvas with an editable Gantt chart saved in a JSON file (JSON Schema): task tree with parent tasks and milestones, timeline bars you can drag, dependencies, progress, color labels, resources, undo / redo, saved versions, and a Japanese / English UI. The agent edits the same chart through actions.",
   "author": {
     "name": "openjny",
     "url": "https://github.com/openjny"

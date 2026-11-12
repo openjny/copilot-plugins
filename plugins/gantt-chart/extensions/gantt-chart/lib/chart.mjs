@@ -1,9 +1,22 @@
 import path from 'node:path';
-import { ModelError, applyOps, emptyDoc, serializeDoc } from './model.mjs';
+import { serializeDoc } from './format.mjs';
+import { t } from './i18n.mjs';
+import { ModelError, applyOps, emptyDoc, fail } from './model.mjs';
 import { startServer } from './server.mjs';
 import { createChartFile, hashText, loadRecent, pathKey, readChartFile, rememberRecent, resolveChartPath, statStamp, withFileLock, writeAtomic } from './store.mjs';
 
 const POLL_MS = 1000;
+const MAX_HISTORY = 100;
+
+/** A short name for what a list of ops does, for the undo / redo tooltips ("update.progress", "add", "mixed"...). */
+export function historyLabel(ops) {
+  const names = new Set(ops.map((op) => op?.op));
+  if (names.size !== 1) return 'mixed';
+  const [name] = names;
+  if (name !== 'update') return name;
+  const fields = new Set(ops.flatMap((op) => Object.keys(op).filter((key) => key !== 'op' && key !== 'id')));
+  return fields.size === 1 ? `update.${[...fields][0]}` : 'update';
+}
 
 /** One open panel: the chart file it shows, the page server, and the live state sent to the page. */
 export class Chart {
@@ -24,6 +37,10 @@ export class Chart {
     this.server = null;
     this.timer = null;
     this.polling = false;
+    // Undo / redo. A document is never changed after it is adopted (an edit works on a copy), so the history
+    // keeps the documents themselves: { doc, label } is the state before the change called `label`.
+    this.past = [];
+    this.future = [];
   }
 
   get url() {
@@ -31,7 +48,7 @@ export class Chart {
   }
 
   get title() {
-    return this.doc?.project.name || (this.file ? path.basename(this.file) : 'ガントチャート');
+    return this.doc?.project.name || (this.file ? path.basename(this.file) : t('app.name'));
   }
 
   async ensureServer() {
@@ -49,8 +66,9 @@ export class Chart {
       rev: this.rev,
       file: this.file ? { path: this.file, name: path.basename(this.file) } : null,
       doc: this.doc ? { project: this.doc.project, tasks: this.doc.tasks } : null,
-      versions: this.doc ? this.doc.snapshots.map((snap) => ({ id: snap.id, name: snap.name, createdAt: snap.createdAt, taskCount: snap.tasks.length })) : [],
-      error: this.error,
+      versions: this.doc ? this.doc.versions.map((version) => ({ id: version.id, name: version.name, createdAt: version.createdAt, taskCount: version.tasks.length })) : [],
+      history: { undo: this.past.at(-1)?.label ?? null, redo: this.future.at(-1)?.label ?? null },
+      error: this.error ? { code: this.error.code, message: this.error.message } : null,
       selection: this.selection,
       recent: this.file ? [] : this.recent,
     };
@@ -60,6 +78,13 @@ export class Chart {
     this.rev++;
     const json = JSON.stringify(this.clientState());
     for (const listener of this.listeners) listener(json);
+  }
+
+  /** Remembers the current document as the state before a change; a new change ends the redo chain. */
+  #record(label) {
+    this.past.push({ doc: this.doc, label });
+    if (this.past.length > MAX_HISTORY) this.past.shift();
+    this.future = [];
   }
 
   /** Opens a chart file, creating it when it does not exist yet. A damaged file is reported, never replaced. */
@@ -84,6 +109,8 @@ export class Chart {
       this.selection = null;
       this.selectionIds = [];
       this.reportedSelection = null;
+      this.past = [];
+      this.future = [];
     });
     this.#startPolling();
     this.#changed();
@@ -99,6 +126,8 @@ export class Chart {
     this.error = null;
     this.selection = null;
     this.selectionIds = [];
+    this.past = [];
+    this.future = [];
     this.recent = await loadRecent(this.log);
     this.#changed();
   }
@@ -123,6 +152,8 @@ export class Chart {
     }
     this.stamp = await statStamp(this.file);
     if (loaded.hash === this.hash && !this.error) return false;
+    // A change made outside (a text editor, another program) can be undone like any other.
+    if (this.doc && !this.error) this.#record('external');
     this.doc = loaded.doc;
     this.hash = loaded.hash;
     this.error = null;
@@ -131,25 +162,55 @@ export class Chart {
     return true;
   }
 
+  /** Makes `doc` the chart's content and saves it (`text` is its file text, when known). */
+  async #adopt(doc, text = serializeDoc(doc)) {
+    const hash = hashText(text);
+    if (hash !== this.hash) {
+      await writeAtomic(this.file, text);
+      this.hash = hash;
+      this.stamp = await statStamp(this.file);
+    }
+    this.doc = doc;
+    this.#pruneSelection();
+    this.#changed();
+  }
+
   /** Applies operations to the file's current content, all or nothing, and saves them. */
   mutate(ops) {
-    if (!this.file) throw new ModelError('no_file', 'ガントチャートのファイルが開かれていません。');
+    if (!this.file) fail('no_file', 'err.noFile');
     return withFileLock(pathKey(this.file), async () => {
       await this.#syncFromDisk();
-      if (this.error) throw new ModelError('file_invalid', `ファイルの問題を解消してから編集してください: ${this.error.message}`);
+      if (this.error) fail('file_invalid', 'err.fileInvalidEdit', { message: this.error.message });
       const { doc, results } = applyOps(this.doc, ops);
       const text = serializeDoc(doc);
-      const hash = hashText(text);
-      if (hash !== this.hash) {
-        await writeAtomic(this.file, text);
-        this.hash = hash;
-        this.stamp = await statStamp(this.file);
-      }
-      this.doc = doc;
-      this.#pruneSelection();
-      this.#changed();
+      // An edit that changes nothing is not a step to undo.
+      if (hashText(text) !== this.hash) this.#record(historyLabel(ops));
+      await this.#adopt(doc, text);
       return { results };
     });
+  }
+
+  /** Goes back to the state before the last change (or forward again): `direction` is "undo" or "redo". */
+  step(direction) {
+    if (!this.file) fail('no_file', 'err.noFile');
+    return withFileLock(pathKey(this.file), async () => {
+      await this.#syncFromDisk();
+      if (this.error) fail('file_invalid', 'err.fileInvalidEdit', { message: this.error.message });
+      const [from, to] = direction === 'undo' ? [this.past, this.future] : [this.future, this.past];
+      const entry = from.pop();
+      if (!entry) fail('nothing_to_do', direction === 'undo' ? 'err.nothingToUndo' : 'err.nothingToRedo');
+      to.push({ doc: this.doc, label: entry.label });
+      await this.#adopt(entry.doc);
+      return { label: entry.label };
+    });
+  }
+
+  undo() {
+    return this.step('undo');
+  }
+
+  redo() {
+    return this.step('redo');
   }
 
   #pruneSelection() {
@@ -181,7 +242,7 @@ export class Chart {
   }
 
   exportText() {
-    return serializeDoc({ ...this.doc, snapshots: [] });
+    return serializeDoc({ ...this.doc, versions: [] });
   }
 
   #startPolling() {
@@ -201,7 +262,7 @@ export class Chart {
     try {
       if ((await statStamp(this.file)) !== this.stamp) await this.refresh();
     } catch (error) {
-      this.log(`ファイルの確認に失敗しました: ${error.message}`);
+      this.log(`Failed to check the file: ${error.message}`);
     } finally {
       this.polling = false;
     }

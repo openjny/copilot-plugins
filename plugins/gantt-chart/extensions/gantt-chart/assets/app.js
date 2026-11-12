@@ -1,4 +1,5 @@
-import { COLORS, FIRST_DAY, dayOfWeek, formatDate, formatDuration, isSummary, makeCalendar, maxSlideEarlier, mondayOnOrBefore, parseDate, parseDuration, schedule, subtreeEnd, todayDay, ymd } from '/model.mjs';
+import { LOCALES, getLocale, resolveLocale, setLocale, t } from '/i18n.mjs';
+import { COLORS, FIRST_DAY, formatDate, formatDuration, isSummary, makeCalendar, maxSlideEarlier, mondayOnOrBefore, parseDate, parseDuration, schedule, subtreeEnd, todayDay, ymd } from '/model.mjs';
 
 // Row height and pixels per day change with Ctrl+scroll, so they are variables; the ROW_STD / PPD values are the
 // "standard" scale that the day / week / month buttons reset to.
@@ -18,10 +19,10 @@ const unitFor = (ppd) => (ppd >= 30 ? 'day' : ppd >= 9.5 ? 'week' : 'month');
 // The timeline never starts before the first Monday of 1970 or ends after 2200 (the range of dates the model accepts).
 const MIN_START = FIRST_DAY;
 const MAX_END = parseDate('2200-12-31');
-const WEEKDAY = ['日', '月', '火', '水', '木', '金', '土'];
-const COLOR_NAME = { none: 'なし', green: '緑', orange: 'オレンジ', red: '赤', purple: '紫', teal: '青緑', gray: 'グレー' };
-const ZOOM_NAME = { day: '日', week: '週', month: '月' };
-const THEME_NAME = { auto: '自動（OS に合わせる）', light: 'ライト', dark: 'ダーク' };
+const UNITS = ['day', 'week', 'month'];
+const THEMES = ['auto', 'light', 'dark'];
+const LOCALE_PREFS = ['auto', ...LOCALES];
+const LOCALE_LABEL = { ja: '日本語', en: 'English' };
 const THEME_ICON = { auto: 'monitor', light: 'sun', dark: 'moon' };
 const SVG_NS = 'http://www.w3.org/2000/svg';
 const ICONS = {
@@ -39,12 +40,20 @@ const ICONS = {
   sun: 'M12 8a4 4 0 1 0 0 8 4 4 0 0 0 0-8zM12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4',
   moon: 'M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z',
   monitor: 'M3 5h18v11H3zM8 20h8M12 16v4',
+  undo: 'M9 14L4 9l5-5M4 9h10a6 6 0 0 1 0 12h-3',
+  redo: 'M15 14l5-5-5-5M20 9H10a6 6 0 0 0 0 12h3',
+  menu: 'M5 12a1 1 0 1 0 2 0 1 1 0 1 0-2 0M11 12a1 1 0 1 0 2 0 1 1 0 1 0-2 0M17 12a1 1 0 1 0 2 0 1 1 0 1 0-2 0',
+  fit: 'M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5',
+  copy: 'M9 9h11v11H9zM5 15V4h11',
+  milestone: 'M12 3l9 9-9 9-9-9z',
+  check: 'M5 12l5 5 9-10',
+  chevron: 'M6 9l6 6 6-6',
 };
 // Columns of the task list besides the name, in display order.
 const COLS = {
   no: { label: '#', width: 36, align: 'right' },
-  dur: { label: '期間', width: 56, align: 'right' },
-  res: { label: '担当', width: 88 },
+  dur: { labelKey: 'col.dur', width: 56, align: 'right' },
+  res: { labelKey: 'col.res', width: 88 },
 };
 const COLS_WIDTH = Object.values(COLS).reduce((sum, col) => sum + col.width, 0);
 
@@ -75,13 +84,43 @@ const app = {
   leftW: Math.max(240, Math.min(360, Math.round(window.innerWidth * 0.4))),
   panelKey: '',
   startKey: null,
-  theme: document.documentElement.dataset.theme in THEME_NAME ? document.documentElement.dataset.theme : 'auto',
+  theme: THEMES.includes(document.documentElement.dataset.theme) ? document.documentElement.dataset.theme : 'auto',
+  locale: LOCALE_PREFS.includes(document.documentElement.dataset.locale) ? document.documentElement.dataset.locale : 'auto',
 };
 
 const $ = (id) => document.getElementById(id);
-const ui = Object.fromEntries(['start', 'editor', 'topbar', 'toolbar', 'banner', 'scroller', 'grid', 'hl', 'ht', 'bl', 'bt', 'panel', 'status', 'project', 'versions', 'confirm', 'toast', 'tip', 'today', 'ctx'].map((id) => [id, $(id)]));
+const ui = Object.fromEntries(['start', 'editor', 'topbar', 'toolbar', 'banner', 'scroller', 'grid', 'hl', 'ht', 'bl', 'bt', 'panel', 'status', 'project', 'versions', 'confirm', 'toast', 'tip', 'today', 'fit', 'empty', 'ctx'].map((id) => [id, $(id)]));
 // Width of the task list in the scroller: the row numbers are always there, the rest (name, duration, assignee) is off by default.
 const listW = () => (app.listOpen ? app.leftW : COLS.no.width);
+
+// ---- Language -----------------------------------------------------------------------------------------------------
+
+/** The language the page shows: the choice, or (for "auto") the browser's. */
+const resolvedLocale = () => (app.locale === 'auto' ? resolveLocale(navigator.language) : app.locale);
+const colorName = (color) => t(`color.${color}`);
+
+/** Puts the chosen language on the page (the static texts, the title) and tells the server, whose messages follow it. */
+function applyLocale() {
+  setLocale(resolvedLocale());
+  document.documentElement.lang = getLocale();
+  document.documentElement.dataset.locale = app.locale;
+  document.title = t('app.name');
+  ui.today.title = ui.today.ariaLabel = t('fab.today');
+  ui.fit.title = ui.fit.ariaLabel = t('fab.fit');
+  ui.bl.setAttribute('aria-label', t('list.aria'));
+  ui.toolbar.setAttribute('aria-label', t('tb.aria'));
+  ui.panel.setAttribute('aria-label', t('panel.aria'));
+  renderEmpty();
+}
+
+/** Intl formatters for the current language, made once per language. */
+const formatters = new Map();
+function dateFormat(options) {
+  const key = `${getLocale()}:${JSON.stringify(options)}`;
+  if (!formatters.has(key)) formatters.set(key, new Intl.DateTimeFormat(getLocale(), { timeZone: 'UTC', ...options }));
+  return formatters.get(key);
+}
+const dayDate = (day) => new Date(day * 86400000);
 
 // ---- DOM helpers --------------------------------------------------------------------------------------------
 
@@ -139,7 +178,7 @@ function confirmDialog(message, okLabel) {
     };
     dialog.replaceChildren(
       h('div', { class: 'db' }, h('p', { id: 'confirm-text', style: { margin: '0' } }, message)),
-      h('div', { class: 'df' }, h('button', { class: 'btn', type: 'button', onclick: () => done(false) }, 'キャンセル'), h('button', { class: 'btn primary', type: 'button', onclick: () => done(true) }, okLabel)),
+      h('div', { class: 'df' }, h('button', { class: 'btn', type: 'button', onclick: () => done(false) }, t('dlg.cancel')), h('button', { class: 'btn primary', type: 'button', onclick: () => done(true) }, okLabel)),
     );
     dialog.addEventListener('cancel', () => resolve(false), { once: true });
     dialog.showModal();
@@ -167,10 +206,10 @@ async function post(path, body) {
   try {
     response = await fetch(path, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
   } catch {
-    throw new Error('サーバーに接続できません。キャンバスを開き直してください。');
+    throw new Error(t('net.offline'));
   }
   const data = await response.json().catch(() => null);
-  if (!response.ok || !data?.ok) throw new Error(data?.error?.message ?? `通信に失敗しました（${response.status}）`);
+  if (!response.ok || !data?.ok) throw new Error(data?.error?.message ?? t('net.failed', { status: response.status }));
   return data;
 }
 
@@ -179,18 +218,25 @@ async function post(path, body) {
  * An error goes to onError when given (a modal dialog covers the toast), otherwise to the toast.
  */
 async function send(ops, onError) {
-  setSaving('saving');
-  try {
-    const data = await post('/api/ops', { ops });
-    applyState(data.state);
-    setSaving('saved');
+  return request('/api/ops', { ops }, (data) => {
     const moved = data.results.find((result) => result.adjusted?.start);
     if (moved) {
-      toast(`先行タスクの終了後（${moved.adjusted.start}）が最も早い開始日のため、開始日を補正しました。`, 'info');
+      toast(t('toast.adjustedStart', { date: moved.adjusted.start }), 'info');
       app.panelKey = '';
       renderPanel();
     }
     return data.results;
+  }, onError);
+}
+
+/** Posts to an API route that changes the chart, shows the state it answers with, and reports a failure. */
+async function request(path, body, done, onError) {
+  setSaving('saving');
+  try {
+    const data = await post(path, body);
+    applyState(data.state);
+    setSaving('saved');
+    return done(data);
   } catch (error) {
     setSaving('error');
     if (onError) onError(error.message);
@@ -202,11 +248,26 @@ async function send(ops, onError) {
   }
 }
 
+/** Undo or redo the last change (the server keeps the history). */
+async function stepHistory(direction) {
+  const wanted = app.state?.history?.[direction];
+  if (!wanted || app.drag) return;
+  await request(`/api/${direction}`, {}, (data) => {
+    toast(t(direction === 'undo' ? 'toast.undone' : 'toast.redone', { label: historyName(data.label) }), 'info');
+  });
+}
+
+/** What a history entry did, in words: "update.progress" -> "Edit progress". */
+function historyName(label) {
+  const key = `history.${label}`;
+  return t(key) === key ? t(`history.${label.split('.')[0]}`) : t(key);
+}
+
 function setSaving(value) {
   app.saving = value;
   const el = document.getElementById('save');
   if (el) {
-    el.textContent = { saved: '保存済み', saving: '保存中…', error: '保存できませんでした' }[value];
+    el.textContent = t(`save.${value}`);
     el.className = `save ${value}`;
   }
 }
@@ -222,7 +283,7 @@ function applyState(state) {
       app.cal = makeCalendar(state.doc.project);
       app.sched = schedule(state.doc, app.cal);
     } catch (error) {
-      toast(`チャートを計算できません: ${error.message}`, 'error');
+      toast(t('toast.cannotCompute', { message: error.message }), 'error');
     }
   }
   if (first && state.selection) {
@@ -254,6 +315,7 @@ function render() {
   renderBanner();
   renderToolbar();
   renderChart();
+  renderEmpty();
   renderPanel();
   renderStatus();
   if (ui.versions.open) renderVersions();
@@ -279,8 +341,8 @@ function renderStart() {
     h(
       'div',
       { class: 'card' },
-      h('h1', {}, 'ガントチャート'),
-      h('p', { class: 'lead' }, 'チャートは JSON ファイル（例: plan.gantt.json）に保存されます。ファイルのパスを指定して開くか、存在しないパスを指定して新しく作成します。エージェントに「ガントチャートを作って」と頼むこともできます。'),
+      h('h1', {}, t('app.name')),
+      h('p', { class: 'lead' }, t('start.lead')),
       h(
         'form',
         {
@@ -289,14 +351,14 @@ function renderStart() {
             if (input.value.trim()) open(input.value.trim());
           },
         },
-        h('label', { for: 'open-path' }, 'JSON ファイルのパス'),
-        h('div', { class: 'row' }, input, h('button', { class: 'btn primary', type: 'submit' }, '開く（なければ作成）')),
+        h('label', { for: 'open-path' }, t('start.pathLabel')),
+        h('div', { class: 'row' }, input, h('button', { class: 'btn primary', type: 'submit' }, t('start.open'))),
       ),
       app.state.recent.length
         ? h(
             'div',
             {},
-            h('h2', {}, '最近使ったファイル'),
+            h('h2', {}, t('start.recent')),
             h('ul', { class: 'recent' }, ...app.state.recent.map((item) => h('li', {}, h('button', { type: 'button', onclick: () => open(item.path) }, h('span', { class: 'rn' }, item.path.split(/[\\/]/).pop()), h('span', { class: 'rp' }, item.path))))),
           )
         : null,
@@ -308,12 +370,53 @@ async function setTheme(theme) {
   if (theme === app.theme) return;
   app.theme = theme;
   document.documentElement.dataset.theme = theme;
-  renderTop();
   try {
     await post('/api/theme', { theme });
   } catch (error) {
     toast(error.message, 'error');
   }
+}
+
+/** Switches the language and draws everything again in it. */
+async function setLocalePref(locale) {
+  if (locale === app.locale) return;
+  app.locale = locale;
+  applyLocale();
+  relocalize();
+  syncLocale();
+}
+
+/** Tells the server which language is chosen and which one the page resolved it to (its messages follow it). */
+async function syncLocale() {
+  try {
+    await post('/api/locale', { locale: app.locale, resolved: resolvedLocale() });
+  } catch (error) {
+    toast(error.message, 'error');
+  }
+}
+
+/** Draws the texts again after the language changed. */
+function relocalize() {
+  formatters.clear();
+  buildToolbar();
+  app.panelKey = '';
+  app.startKey = null;
+  if (app.state) render();
+}
+
+function openSettingsMenu(event) {
+  const radio = (choices, current, label, run, iconOf) => choices.map((value) => ({ label: label(value), icon: iconOf?.(value), checked: value === current, run: () => run(value) }));
+  showMenu(event.currentTarget, [
+    { label: t('menu.project'), icon: 'sliders', run: openProject },
+    { label: t('menu.versions'), icon: 'history', run: openVersions },
+    { label: t('menu.export'), icon: 'download', run: () => document.getElementById('export-link')?.click() },
+    { separator: true },
+    { heading: t('menu.language') },
+    ...radio(LOCALE_PREFS, app.locale, (value) => (value === 'auto' ? t('locale.auto') : LOCALE_LABEL[value]), setLocalePref),
+    { separator: true },
+    { heading: t('menu.theme') },
+    ...radio(THEMES, app.theme, (value) => t(`theme.${value}`), setTheme, (value) => THEME_ICON[value]),
+  ]);
 }
 
 function renderTop() {
@@ -324,8 +427,8 @@ function renderTop() {
       {
         class: 'btn flat tbtn',
         type: 'button',
-        'aria-label': 'ファイル選択に戻る',
-        title: 'ファイル選択に戻る',
+        'aria-label': t('top.back'),
+        title: t('top.back'),
         onclick: async () => {
           try {
             applyState((await post('/api/open', { path: null })).state);
@@ -335,38 +438,30 @@ function renderTop() {
         },
       },
       '←',
-      h('span', { class: 'label' }, 'ファイル選択'),
+      h('span', { class: 'label' }, t('top.backLabel')),
     ),
     h('div', { class: 'ttl' }, h('span', { class: 'title', title: doc.project.name || file.name }, doc.project.name || file.name), h('span', { class: 'file', title: file.path }, file.name)),
     h('span', { class: 'spacer' }),
     h('span', { id: 'save', class: 'save', 'aria-live': 'polite' }),
     h(
       'div',
-      { class: 'seg', role: 'group', 'aria-label': '表示の単位' },
-      ...Object.entries(ZOOM_NAME).map(([zoom, label]) =>
+      { class: 'seg', role: 'group', 'aria-label': t('unit.group') },
+      ...UNITS.map((zoom) =>
         h(
           'button',
           {
             class: 'btn',
             type: 'button',
-            title: `${label}表示（標準の拡大率に戻します。Ctrl+スクロールで拡大・縮小すると、日・週・月は自動で切り替わります）`,
+            title: t('unit.title', { label: t(`unit.${zoom}`) }),
             'aria-pressed': String(app.zoom === zoom),
             onclick: () => setScale(PPD[zoom], ROW_STD),
           },
-          label,
+          t(`unit.${zoom}`),
         ),
       ),
     ),
-    h(
-      'div',
-      { class: 'seg', role: 'group', 'aria-label': '表示テーマ' },
-      ...Object.entries(THEME_NAME).map(([theme, label]) =>
-        h('button', { class: 'btn square', type: 'button', title: label, 'aria-label': label, 'aria-pressed': String(app.theme === theme), onclick: () => setTheme(theme) }, icon(THEME_ICON[theme])),
-      ),
-    ),
-    h('button', { class: 'btn tbtn', type: 'button', title: 'プロジェクト設定（名前・休日）', 'aria-label': 'プロジェクト設定', onclick: openProject }, icon('sliders'), h('span', { class: 'label' }, 'プロジェクト')),
-    h('button', { class: 'btn tbtn', type: 'button', title: 'バージョン', 'aria-label': 'バージョン', onclick: openVersions }, icon('history'), h('span', { class: 'label' }, 'バージョン')),
-    h('a', { class: 'btn tbtn', href: '/api/export', download: file.name, target: '_blank', title: 'JSON エクスポート', 'aria-label': 'JSON エクスポート' }, icon('download'), h('span', { class: 'label' }, 'JSON エクスポート')),
+    h('button', { class: 'btn square', type: 'button', title: t('menu.title'), 'aria-label': t('menu.title'), 'aria-haspopup': 'menu', onclick: openSettingsMenu }, icon('menu')),
+    h('a', { id: 'export-link', hidden: true, href: '/api/export', download: file.name }),
   );
   setSaving(app.saving);
 }
@@ -439,24 +534,12 @@ document.addEventListener(
 function renderBanner() {
   const error = app.state.error;
   ui.banner.hidden = !error;
-  ui.banner.textContent = error ? `ファイルを読み込めません: ${error.message} ファイルを直すと自動で読み込み直します。直るまで編集はできません。` : '';
+  ui.banner.textContent = error ? t('banner.fileError', { message: error.message }) : '';
 }
 
 function buildToolbar() {
   const button = (id, name, label, onclick) => h('button', { id, class: 'btn square', type: 'button', 'aria-label': label, title: label, onclick }, icon(name));
-  const colorSelect = h(
-    'select',
-    {
-      id: 'tb-color',
-      'aria-label': '色ラベル',
-      title: '色ラベル',
-      onchange: (event) => {
-        const row = selectedRow();
-        if (row) send([{ op: 'update', id: row.id, color: event.target.value }]);
-      },
-    },
-    ...COLORS.map((color) => h('option', { value: color }, COLOR_NAME[color])),
-  );
+  const colorButton = h('button', { id: 'tb-color', class: 'btn colorbtn', type: 'button', 'aria-haspopup': 'menu', onclick: (event) => openColorMenu(event.currentTarget) }, h('i', { class: 'dot c-none' }), icon('chevron'));
   ui.toolbar.replaceChildren(
     h(
       'button',
@@ -464,24 +547,40 @@ function buildToolbar() {
         id: 'tb-list',
         class: 'btn square',
         type: 'button',
-        title: 'タスク名・期間・担当の表示 / 非表示（# は常に表示）',
-        'aria-label': 'タスク名・期間・担当の表示 / 非表示',
+        title: t('tb.list'),
+        'aria-label': t('tb.list'),
         onclick: toggleList,
       },
       icon('sidebar'),
     ),
     h('span', { class: 'sep' }),
-    button('tb-add', 'plus', 'タスクを追加', onAdd),
-    button('tb-del', 'trash', 'タスクを削除', onDelete),
+    button('tb-undo', 'undo', t('tb.undo'), () => stepHistory('undo')),
+    button('tb-redo', 'redo', t('tb.redo'), () => stepHistory('redo')),
     h('span', { class: 'sep' }),
-    button('tb-indent', 'indent', 'インデント（直前のタスクの子にする）', () => operate('indent')),
-    button('tb-outdent', 'outdent', 'アウトデント', () => operate('outdent')),
-    button('tb-up', 'up', '上へ移動', () => operate('shift', { direction: 'up' })),
-    button('tb-down', 'down', '下へ移動', () => operate('shift', { direction: 'down' })),
+    button('tb-add', 'plus', t('tb.add'), onAdd),
+    button('tb-del', 'trash', t('tb.delete'), onDelete),
     h('span', { class: 'sep' }),
-    colorSelect,
+    button('tb-indent', 'indent', t('tb.indent'), () => operate('indent')),
+    button('tb-outdent', 'outdent', t('tb.outdent'), () => operate('outdent')),
+    button('tb-up', 'up', t('tb.up'), () => operate('shift', { direction: 'up' })),
+    button('tb-down', 'down', t('tb.down'), () => operate('shift', { direction: 'down' })),
+    h('span', { class: 'sep' }),
+    colorButton,
   );
 }
+
+/** The menu of color labels for the selected tasks, each with its swatch. */
+function openColorMenu(anchor) {
+  const ids = [...app.picked];
+  if (!ids.length) return;
+  const current = taskById(app.selected ?? ids[0])?.color ?? 'none';
+  showMenu(
+    anchor,
+    COLORS.map((color) => ({ label: colorName(color), swatch: color, checked: color === current, run: () => setColor(ids, color) })),
+  );
+}
+
+const setColor = (ids, color) => send(ids.map((id) => ({ op: 'update', id, color })));
 
 const clampLeftWidth = (width) => Math.max(COLS_WIDTH + 40, Math.min(width, 720, ui.scroller.clientWidth - 160));
 
@@ -504,23 +603,45 @@ function siblingExists(list, i, direction) {
   return end < list.length && list[end].level === level;
 }
 
+/** Which of indent / outdent / move up / move down apply to the task at index i. */
+function moveState(list, i) {
+  return {
+    indent: i > 0 && list[i - 1].level >= list[i].level,
+    outdent: list[i].level > 0,
+    up: siblingExists(list, i, 'up'),
+    down: siblingExists(list, i, 'down'),
+  };
+}
+
 function renderToolbar() {
   const list = tasks();
   // The operations act on one task; with several selected they wait until the selection is back to one.
   const row = app.picked.size > 1 ? undefined : selectedRow();
-  const i = row ? row.index : -1;
+  const can = row ? moveState(list, row.index) : { indent: false, outdent: false, up: false, down: false };
   const set = (id, disabled) => {
     $(id).disabled = disabled;
   };
+  const label = (id, text) => {
+    $(id).title = text;
+    $(id).setAttribute('aria-label', text);
+  };
+  const history = app.state.history ?? {};
+  set('tb-undo', !history.undo);
+  set('tb-redo', !history.redo);
+  label('tb-undo', history.undo ? t('tb.undoWith', { label: historyName(history.undo) }) : t('tb.undo'));
+  label('tb-redo', history.redo ? t('tb.redoWith', { label: historyName(history.redo) }) : t('tb.redo'));
   set('tb-add', false);
   set('tb-del', app.picked.size === 0 && !app.selLink);
-  set('tb-indent', !row || i === 0 || list[i - 1].level < list[i].level);
-  set('tb-outdent', !row || list[i].level === 0);
-  set('tb-up', !row || !siblingExists(list, i, 'up'));
-  set('tb-down', !row || !siblingExists(list, i, 'down'));
+  set('tb-indent', !can.indent);
+  set('tb-outdent', !can.outdent);
+  set('tb-up', !can.up);
+  set('tb-down', !can.down);
   const color = $('tb-color');
-  color.disabled = !row;
-  color.value = row ? list[i].color : 'none';
+  const own = taskById(app.selected)?.color ?? 'none';
+  color.disabled = app.picked.size === 0;
+  color.firstChild.className = `dot c-${own}`;
+  color.title = t('tb.colorWith', { name: colorName(own) });
+  color.setAttribute('aria-label', color.title);
   $('tb-list').setAttribute('aria-pressed', String(app.listOpen));
 }
 
@@ -571,8 +692,8 @@ async function deleteTasks(ids) {
   if (!top.length) return;
   const total = top.reduce((sum, i) => sum + subtreeEnd(list, i) - i, 0);
   if (total > 1) {
-    const message = top.length === 1 ? `「${list[top[0]].name}」と、その子タスクをすべて削除します。` : `選択中の ${top.length} 件${total > top.length ? `（子タスクを含めて ${total} 件）` : ''}を削除します。`;
-    if (!(await confirmDialog(message, '削除'))) return;
+    const message = top.length === 1 ? t('del.confirmTree', { name: list[top[0]].name }) : total > top.length ? t('del.confirmManyTrees', { count: top.length, total }) : t('del.confirmMany', { count: top.length });
+    if (!(await confirmDialog(message, t('del.ok')))) return;
   }
   await send(top.map((i) => ({ op: 'delete', id: list[i].id })));
 }
@@ -587,31 +708,109 @@ async function operate(op, extra = {}) {
   if (row) await send([{ op, id: row.id, ...extra }]);
 }
 
-// ---- Context menu (right click) -------------------------------------------------------------------------------------
+/** Copies the tasks (each with its children) right after themselves and selects the copies. */
+async function duplicateTasks(ids) {
+  const list = tasks();
+  const indexes = ids.map((id) => list.findIndex((task) => task.id === id)).filter((i) => i >= 0).sort((a, b) => a - b);
+  const top = [];
+  let until = -1;
+  for (const i of indexes) {
+    if (i < until) continue;
+    top.push(list[i].id);
+    until = subtreeEnd(list, i);
+  }
+  if (!top.length) return;
+  const results = await send(top.map((id) => ({ op: 'duplicate', id })));
+  if (results) pick(results.map((result) => result.copy), results[0].copy);
+}
+
+/** Adds a task as the last child of a task (opening it when it is folded). */
+async function addChild(id) {
+  const ops = [];
+  if (taskById(id)?.collapsed) ops.push({ op: 'update', id, collapsed: false });
+  ops.push({ op: 'add', parent: id });
+  const results = await send(ops);
+  focusNewTask(results?.at(-1)?.id);
+}
+
+// ---- Menus (the right-click menu and the buttons that open a list) -------------------------------------------------
 
 function hideMenu() {
   ui.ctx.hidden = true;
 }
 
-/** Shows a small menu at the pointer. `items` are { label, run }; it closes on any click, Esc, scroll or when the window loses focus. */
-function showMenu(event, items) {
-  event.preventDefault();
-  ui.ctx.replaceChildren(
-    ...items.map(({ label, run }) =>
-      h('button', { class: 'ctx-item danger', type: 'button', role: 'menuitem', onclick: () => { hideMenu(); run(); } }, label),
-    ),
-  );
+/**
+ * Shows a menu at the pointer (`at` is a mouse event) or under a button (`at` is the element). An item is one of
+ * { label, run, icon?, swatch?, checked?, danger?, disabled?, hint? }, { separator: true }, { heading }, or
+ * { swatches: colors, current, run(color) } for a row of color dots. It closes on a click, Esc, scrolling or leaving the window.
+ */
+function showMenu(at, items) {
+  const pointer = typeof at.clientX === 'number';
+  if (pointer) at.preventDefault();
+  const choose = (run, ...args) => () => {
+    hideMenu();
+    run(...args);
+  };
+  const entry = (item) => {
+    if (item.separator) return h('div', { class: 'ctx-sep', role: 'separator' });
+    if (item.heading) return h('div', { class: 'ctx-head' }, item.heading);
+    if (item.swatches) {
+      return h(
+        'div',
+        { class: 'ctx-swatches', role: 'group' },
+        ...item.swatches.map((color) => h('button', { class: `sw c-${color}`, type: 'button', role: 'menuitemradio', 'aria-checked': String(color === item.current), title: colorName(color), 'aria-label': colorName(color), onclick: choose(item.run, color) }, h('i', { class: `dot c-${color}` }))),
+      );
+    }
+    const lead = item.swatch ? h('i', { class: `dot c-${item.swatch}` }) : item.checked ? icon('check') : item.icon ? icon(item.icon) : h('span', { class: 'ctx-gap' });
+    return h(
+      'button',
+      { class: `ctx-item${item.danger ? ' danger' : ''}${item.checked ? ' on' : ''}`, type: 'button', role: item.checked !== undefined ? 'menuitemradio' : 'menuitem', 'aria-checked': item.checked === undefined ? null : String(item.checked), disabled: item.disabled, onclick: choose(item.run) },
+      lead,
+      h('span', { class: 'ctx-label' }, item.label),
+      item.hint ? h('span', { class: 'ctx-hint' }, item.hint) : null,
+    );
+  };
+  ui.ctx.replaceChildren(...items.map(entry));
   ui.ctx.hidden = false;
-  ui.ctx.style.left = `${Math.max(4, Math.min(event.clientX, window.innerWidth - ui.ctx.offsetWidth - 4))}px`;
-  ui.ctx.style.top = `${Math.max(4, Math.min(event.clientY, window.innerHeight - ui.ctx.offsetHeight - 4))}px`;
-  ui.ctx.querySelector('button')?.focus();
+  const rect = pointer ? null : at.getBoundingClientRect();
+  const x = pointer ? at.clientX : rect.left;
+  const y = pointer ? at.clientY : rect.bottom + 4;
+  ui.ctx.style.left = `${Math.max(4, Math.min(x, window.innerWidth - ui.ctx.offsetWidth - 4))}px`;
+  ui.ctx.style.top = `${Math.max(4, Math.min(y, window.innerHeight - ui.ctx.offsetHeight - 4))}px`;
+  ui.ctx.querySelector('button:not(:disabled)')?.focus();
 }
 
 /** The menu for a task: the right-clicked task is selected first, unless it is already part of the selection. */
 function taskMenu(event, id) {
   if (!app.picked.has(id)) select(id);
   const ids = [...app.picked];
-  showMenu(event, [{ label: ids.length > 1 ? `選択中の ${ids.length} 件を削除` : 'タスクを削除', run: () => deleteTasks(ids) }]);
+  const several = ids.length > 1;
+  const list = tasks();
+  const i = list.findIndex((task) => task.id === id);
+  const row = rowById(id);
+  const can = moveState(list, i);
+  const items = [];
+  if (!several) {
+    items.push(
+      { label: t('ctx.insertAbove'), icon: 'plus', run: () => insertTask('before', id) },
+      { label: t('ctx.insertBelow'), icon: 'plus', run: () => insertTask('after', id) },
+      { label: t('ctx.addChild'), icon: 'indent', run: () => addChild(id) },
+    );
+  }
+  items.push({ label: several ? t('ctx.duplicateMany', { count: ids.length }) : t('ctx.duplicate'), icon: 'copy', hint: 'Ctrl+D', run: () => duplicateTasks(ids) });
+  if (!several) {
+    items.push(
+      { separator: true },
+      { label: t('tb.indentShort'), icon: 'indent', disabled: !can.indent, run: () => send([{ op: 'indent', id }]) },
+      { label: t('tb.outdent'), icon: 'outdent', disabled: !can.outdent, run: () => send([{ op: 'outdent', id }]) },
+      { label: t('tb.up'), icon: 'up', hint: 'Alt+↑', disabled: !can.up, run: () => send([{ op: 'shift', id, direction: 'up' }]) },
+      { label: t('tb.down'), icon: 'down', hint: 'Alt+↓', disabled: !can.down, run: () => send([{ op: 'shift', id, direction: 'down' }]) },
+      { separator: true },
+      { label: row.milestone ? t('ctx.makeTask') : t('ctx.makeMilestone'), icon: 'milestone', disabled: row.summary, run: () => send([{ op: 'update', id, milestone: !row.milestone }]) },
+    );
+  }
+  items.push({ separator: true }, { heading: t('tb.color') }, { swatches: COLORS, current: list[i].color, run: (color) => setColor(ids, color) }, { separator: true }, { label: several ? t('ctx.deleteMany', { count: ids.length }) : t('ctx.deleteOne'), icon: 'trash', hint: 'Del', danger: true, run: () => deleteTasks(ids) });
+  showMenu(event, items);
 }
 
 ui.bt.addEventListener('contextmenu', (event) => {
@@ -640,6 +839,13 @@ document.addEventListener(
       event.stopPropagation();
     }
     if (event.key === 'Escape' || event.key === 'Tab') hideMenu();
+    if (event.key === 'ArrowDown' || event.key === 'ArrowUp' || event.key === 'Home' || event.key === 'End') {
+      event.preventDefault();
+      const buttons = [...ui.ctx.querySelectorAll('button:not(:disabled)')];
+      const at = buttons.indexOf(document.activeElement);
+      const next = event.key === 'Home' ? 0 : event.key === 'End' ? buttons.length - 1 : (at + (event.key === 'ArrowDown' ? 1 : -1) + buttons.length) % buttons.length;
+      buttons[next]?.focus();
+    }
   },
   true,
 );
@@ -678,6 +884,25 @@ function scrollToToday() {
   const { start, ppd, today } = app.range;
   const viewport = ui.scroller.clientWidth - listW();
   ui.scroller.scrollLeft = Math.max(0, (today - start) * ppd - viewport / 4);
+}
+
+/** Zooms so that the whole project fits the width of the view, and scrolls to its start. */
+function fitAll() {
+  const project = app.sched?.project;
+  if (!project || project.startDay === null) return;
+  const view = ui.scroller.clientWidth - listW();
+  const days = project.endDay - project.startDay + 1;
+  setScale(clamp((view - 48) / days, PPD_MIN, PPD_MAX), ROW_STD);
+  const { start, ppd } = app.range;
+  ui.scroller.scrollLeft = Math.max(0, (project.startDay - start) * ppd - 24);
+}
+
+/** A hint with a button in the middle of the chart while there are no tasks. */
+function renderEmpty() {
+  const empty = Boolean(app.state?.file && app.state.doc && app.state.doc.tasks.length === 0);
+  ui.empty.hidden = !empty;
+  if (!empty) return;
+  ui.empty.replaceChildren(h('p', { class: 'empty-title' }, t('empty.title')), h('p', { class: 'empty-hint' }, t('empty.hint')), h('button', { class: 'btn primary', type: 'button', onclick: onAdd }, icon('plus'), t('empty.add')));
 }
 
 /**
@@ -789,7 +1014,7 @@ function growRange() {
 }
 
 function renderLeftHeader() {
-  const splitter = h('div', { class: 'splitter', role: 'separator', 'aria-orientation': 'vertical', 'aria-label': '一覧の幅', tabindex: '0' });
+  const splitter = h('div', { class: 'splitter', role: 'separator', 'aria-orientation': 'vertical', 'aria-label': t('list.width'), tabindex: '0' });
   const resize = (width) => {
     app.leftW = clampLeftWidth(width);
     ui.grid.style.setProperty('--leftW', `${app.leftW}px`);
@@ -815,10 +1040,10 @@ function renderLeftHeader() {
     renderChart();
     ui.hl.querySelector('.splitter')?.focus();
   });
-  const head = (key) => h('div', COLS[key].align ? { style: { textAlign: COLS[key].align } } : {}, COLS[key].label);
+  const head = (key) => h('div', COLS[key].align ? { style: { textAlign: COLS[key].align } } : {}, COLS[key].label ?? t(COLS[key].labelKey));
   // Only the row numbers while the list is folded; the name, duration and assignee columns follow when it is open.
   if (!app.listOpen) return ui.hl.replaceChildren(h('div', { class: 'cols' }, head('no')));
-  ui.hl.replaceChildren(h('div', { class: 'cols' }, head('no'), h('div', {}, 'タスク名'), head('dur'), head('res')), splitter);
+  ui.hl.replaceChildren(h('div', { class: 'cols' }, head('no'), h('div', {}, t('col.name')), head('dur'), head('res')), splitter);
 }
 
 function renderTimelineHeader() {
@@ -827,33 +1052,34 @@ function renderTimelineHeader() {
   const bottom = h('div', { class: 'hrow' });
   const cell = (parent, from, to, text, cls = '', title = '') =>
     parent.append(h('div', { class: `hc ${cls}`.trim(), style: { left: `${(from - start) * ppd}px`, width: `${(to - from + 1) * ppd}px` }, title }, text));
+  const fmt = (day, options) => dateFormat(options).format(dayDate(day));
+  const monthLong = { year: 'numeric', month: 'long' };
   if (app.zoom === 'day') {
     for (let monday = start; monday <= end; monday += 7) {
-      const a = ymd(monday);
-      const b = ymd(monday + 6);
-      cell(top, monday, monday + 6, `${a.y}年${a.m}月${a.d}日 – ${a.y === b.y ? '' : `${b.y}年`}${b.m}月${b.d}日`, 'grp');
+      const same = ymd(monday).y === ymd(monday + 6).y;
+      cell(top, monday, monday + 6, `${fmt(monday, same ? { month: 'short', day: 'numeric' } : { year: 'numeric', month: 'short', day: 'numeric' })} – ${fmt(monday + 6, { year: 'numeric', month: 'short', day: 'numeric' })}`, 'grp');
     }
     // Below 40px a day column has no room for the weekday.
-    for (let day = start; day <= end; day++) cell(bottom, day, day, ppd >= 40 ? `${ymd(day).d} (${WEEKDAY[dayOfWeek(day)]})` : String(ymd(day).d), app.cal.isWorkday(day) ? '' : 'off', formatDate(day));
+    for (let day = start; day <= end; day++) cell(bottom, day, day, ppd >= 40 ? `${ymd(day).d} (${fmt(day, { weekday: 'short' })})` : String(ymd(day).d), app.cal.isWorkday(day) ? '' : 'off', formatDate(day));
   } else if (app.zoom === 'week') {
-    for (const seg of monthSegments(start, end)) cell(top, seg.from, seg.to, `${seg.y}年${seg.m}月`, 'grp');
-    for (let monday = start; monday <= end; monday += 7) cell(bottom, monday, monday + 6, `${ymd(monday).m}/${ymd(monday).d}`, '', formatDate(monday));
+    for (const seg of monthSegments(start, end)) cell(top, seg.from, seg.to, fmt(seg.from, monthLong), 'grp');
+    for (let monday = start; monday <= end; monday += 7) cell(bottom, monday, monday + 6, fmt(monday, { month: 'numeric', day: 'numeric' }), '', formatDate(monday));
   } else {
     const months = monthSegments(start, end);
     for (let i = 0; i < months.length; ) {
       let j = i;
       while (j + 1 < months.length && months[j + 1].y === months[i].y) j++;
-      cell(top, months[i].from, months[j].to, `${months[i].y}年`, 'grp');
+      cell(top, months[i].from, months[j].to, fmt(months[i].from, { year: 'numeric' }), 'grp');
       i = j + 1;
     }
-    for (const seg of months) cell(bottom, seg.from, seg.to, `${seg.m}月`, '', `${seg.y}年${seg.m}月`);
+    for (const seg of months) cell(bottom, seg.from, seg.to, fmt(seg.from, { month: 'short' }), '', fmt(seg.from, monthLong));
   }
   ui.ht.replaceChildren(top, bottom);
 }
 
 /** The + shown above / below a row number while the pointer is on it. */
 function insertButton(where, row) {
-  const label = where === 'before' ? `#${row.row} の上にタスクを挿入` : `#${row.row} の下にタスクを挿入`;
+  const label = where === 'before' ? t('ins.above', { row: row.row }) : t('ins.below', { row: row.row });
   const stop = (event) => event.stopPropagation();
   return h('button', {
     class: `ins ins-${where}`,
@@ -879,7 +1105,7 @@ function leftRow(row) {
           class: 'caret',
           type: 'button',
           tabindex: '-1',
-          'aria-label': task.collapsed ? '展開' : '折りたたむ',
+          'aria-label': task.collapsed ? t('list.expand') : t('list.collapse'),
           onclick: (event) => {
             event.stopPropagation();
             send([{ op: 'update', id: row.id, collapsed: !task.collapsed }]);
@@ -895,7 +1121,7 @@ function leftRow(row) {
           type: 'text',
           value: app.editText,
           maxlength: '200',
-          'aria-label': 'タスク名',
+          'aria-label': t('panel.name'),
           oninput: (event) => {
             app.editText = event.target.value;
           },
@@ -906,7 +1132,7 @@ function leftRow(row) {
           },
           onblur: () => finishEdit(true),
         })
-      : h('span', { class: 'name', title: task.name }, task.name || '（名称なし）');
+      : h('span', { class: 'name', title: task.name }, task.name || t('list.unnamed'));
   const resources = task.resources.join(', ');
   const attrs = { class: `cols lrow${selected ? ' sel' : ''}${row.summary ? ' summary' : ''}`, role: 'row', 'aria-level': row.level + 1, 'aria-selected': String(selected), 'data-id': row.id };
   if (row.summary) attrs['aria-expanded'] = String(!task.collapsed);
@@ -969,7 +1195,7 @@ function renderBody() {
     for (let day = start + step; day < start + days; day += step) parts.push(h('div', { class: 'vl', style: { left: `${(day - start) * ppd}px` } }));
   }
   if (today >= start && today < start + days) {
-    parts.push(h('div', { class: 'today', title: `今日（${formatDate(today)}）`, style: { left: `${(today - start) * ppd + (app.zoom === 'day' ? ppd / 2 - 1 : 0)}px` } }));
+    parts.push(h('div', { class: 'today', title: t('chart.today', { date: formatDate(today) }), style: { left: `${(today - start) * ppd + (app.zoom === 'day' ? ppd / 2 - 1 : 0)}px` } }));
   }
 
   // The ground under a parent task: a light rectangle in its color, from its row to the row of its last child.
@@ -990,7 +1216,7 @@ function renderBody() {
     const width = (row.endDay - row.startDay + 1) * ppd;
     const top = rowTop.get(row.id);
     const percent = Math.round(row.progress);
-    const label = `${task.name}: ${formatDate(row.startDay)} – ${formatDate(row.endDay)}（${formatDuration(row.duration)}）進捗 ${percent}%`;
+    const label = t('bar.label', { name: task.name, start: formatDate(row.startDay), end: formatDate(row.endDay), duration: formatDuration(row.duration), progress: percent });
     const selected = app.picked.has(row.id);
     if (row.summary) {
       // A parent is a bar with a notch at each end and, when the names are shown on the bars, its name on top.
@@ -1003,6 +1229,15 @@ function renderBody() {
       parts.push(sbar);
       if (named) parts.push(h('div', { class: 'sum-label', style: { left: `${left}px`, top: `${y}px` } }, `${task.name}  ${percent}%`));
       else parts.push(h('div', { class: 'after-label', style: { left: `${left + width}px`, top: `${top + 5}px` } }, `${percent}%`));
+      continue;
+    }
+    if (row.milestone) {
+      // A milestone is a diamond centered on its day, with its name after it.
+      const size = BAR_H;
+      const cx = left + ppd / 2;
+      const diamond = h('div', { class: `bar ms c-${colorOf(row)}${selected ? ' sel' : ''}`, 'data-id': row.id, role: 'img', 'aria-label': label, title: label, style: { left: `${cx - size / 2}px`, width: `${size}px`, top: `${top + 5}px` } });
+      wireBar(diamond, row);
+      parts.push(diamond, h('div', { class: 'after-label', style: { left: `${cx + size / 2}px`, top: `${top + 5}px` } }, task.name));
       continue;
     }
     // Without the list the name goes inside the bar when it fits, otherwise after it.
@@ -1055,7 +1290,7 @@ function linksLayer(rowTop) {
     hit.addEventListener('pointerleave', () => path.classList.remove('hover'));
     hit.addEventListener('contextmenu', (event) => {
       selectLink(link.from.id, link.to.id);
-      showMenu(event, [{ label: '依存関係を削除', run: deleteLink }]);
+      showMenu(event, [{ label: t('ctx.deleteLink'), icon: 'trash', danger: true, hint: 'Del', run: deleteLink }]);
     });
     svg.append(path, hit);
   }
@@ -1111,8 +1346,10 @@ function layoutLinks(rowTop, start, ppd) {
     }
   }
   for (const link of links) {
-    link.x1 = (link.from.endDay - start + 1) * ppd;
-    link.x2 = (link.to.startDay - start) * ppd;
+    // A milestone is a diamond in the middle of its day, so a link meets its tip rather than the edge of the day.
+    const half = BAR_H / 2;
+    link.x1 = link.from.milestone ? (link.from.startDay - start + 0.5) * ppd + half : (link.from.endDay - start + 1) * ppd;
+    link.x2 = link.to.milestone ? (link.to.startDay - start + 0.5) * ppd - half : (link.to.startDay - start) * ppd;
     link.sy = rowTop.get(link.from.id) + ROW_H / 2 + link.y1;
     link.ey = rowTop.get(link.to.id) + ROW_H / 2 + link.y2;
     // The arrow head covers the end of the line, so the last leg must be longer than it or only the head is left.
@@ -1286,14 +1523,14 @@ function renderStatus() {
   const project = app.sched.project;
   const slash = (day) => formatDate(day).replaceAll('-', '/');
   const parts = [
-    `タスク: ${project.count}`,
-    `工数: ${project.effort === null ? '-' : `${project.effort}h`}`,
-    `期間: ${project.count ? formatDuration(project.duration) : '-'}`,
-    `進捗: ${project.count ? `${project.progress.toFixed(2)}%` : '-'}`,
+    t('status.tasks', { value: project.count }),
+    t('status.effort', { value: project.effort === null ? '-' : `${project.effort}h` }),
+    t('status.duration', { value: project.count ? formatDuration(project.duration) : '-' }),
+    t('status.progress', { value: project.count ? `${project.progress.toFixed(2)}%` : '-' }),
   ];
   const row = selectedRow();
-  if (app.selLink) parts.push('依存関係を選択中（Delete で削除）');
-  else if (app.picked.size > 1) parts.push(`${app.picked.size} 件を選択中`);
+  if (app.selLink) parts.push(t('status.linkSelected'));
+  else if (app.picked.size > 1) parts.push(t('status.selectedMany', { count: app.picked.size }));
   else if (row) parts.push(`${taskById(row.id).name}  ${slash(row.startDay)} – ${slash(row.endDay)} (${formatDuration(row.duration)})`);
   ui.status.replaceChildren(...parts.map((text) => h('span', {}, text)));
 }
@@ -1397,8 +1634,8 @@ function updateDrag(drag) {
     }
     start = app.cal.add(drag.row.startDay, days);
     end = app.cal.add(drag.row.endDay, days);
-    if (drag.leaves.length > 1) note += `（${drag.leaves.length} 件を一緒に移動）`;
-    if (limited) note += ' 先行タスクの終了後が下限';
+    if (drag.leaves.length > 1) note += ` ${t('drag.moveTogether', { count: drag.leaves.length })}`;
+    if (limited) note += ` ${t('drag.limited')}`;
   } else {
     drag.bar.style.width = `${Math.max(ppd, drag.width + drag.delta * ppd)}px`;
     ({ start, end } = resizeTarget(drag));
@@ -1531,16 +1768,10 @@ function endMarquee(event) {
 // Two arrows sit above and below the selected bar (the sides are left free for resizing). The top one is for
 // a task that comes before this one, the bottom one for a task that comes after it; they differ in color and label.
 const LINK_DIRECTION = { top: 'in', bottom: 'out' };
-const LINK_TITLE = {
-  in: '先行タスクにつなぐ（このタスクの前に済ませるタスクへドラッグ、またはクリックしてからタスクを選ぶ）',
-  out: '後続タスクにつなぐ（このタスクの後に始めるタスクへドラッグ、またはクリックしてからタスクを選ぶ）',
-};
+const linkTitle = (dir) => t(dir === 'in' ? 'link.titleIn' : 'link.titleOut');
 // Short, always visible text next to each arrow, so the two are told apart without relying on color.
-const LINK_TAG = { in: '先行', out: '後続' };
-const LINK_HINT = {
-  in: '先行タスクにするタスクをクリックしてください（Esc で取り消し）',
-  out: '後続タスクにするタスクをクリックしてください（Esc で取り消し）',
-};
+const linkTag = (dir) => t(dir === 'in' ? 'link.tagIn' : 'link.tagOut');
+const linkHint = (dir) => t(dir === 'in' ? 'link.hintIn' : 'link.hintOut');
 
 function renderConnectors() {
   ui.bt.querySelector('.conn')?.remove();
@@ -1556,8 +1787,8 @@ function renderConnectors() {
       ...sides.flatMap((side) => {
         const dir = LINK_DIRECTION[side];
         return [
-          h('button', { class: `conn-h conn-${side} dir-${dir}`, type: 'button', tabindex: '-1', title: LINK_TITLE[dir], 'aria-label': LINK_TITLE[dir], onpointerdown: (event) => beginLink(event, row, side), onpointermove: updateLink, onpointerup: releaseLink, onpointercancel: cancelLink }),
-          h('span', { class: `conn-tag conn-tag-${side} dir-${dir}` }, LINK_TAG[dir]),
+          h('button', { class: `conn-h conn-${side} dir-${dir}`, type: 'button', tabindex: '-1', title: linkTitle(dir), 'aria-label': linkTitle(dir), onpointerdown: (event) => beginLink(event, row, side), onpointermove: updateLink, onpointerup: releaseLink, onpointercancel: cancelLink }),
+          h('span', { class: `conn-tag conn-tag-${side} dir-${dir}` }, linkTag(dir)),
         ];
       }),
     ),
@@ -1599,11 +1830,11 @@ function beginLink(event, row, side) {
 /** Why `targetId` cannot be connected to the task being linked, or '' when it can. */
 function linkProblem(targetId) {
   const link = app.link;
-  if (targetId === link.id) return '自分自身にはつなげません。';
+  if (targetId === link.id) return t('link.errSelf');
   const [pred, succ] = link.dir === 'out' ? [link.id, targetId] : [targetId, link.id];
-  if (rowById(succ)?.summary) return '子タスクを持つタスクは、先行タスクを持てません（日付が子タスクから決まるため）。';
-  if (taskById(succ).predecessors.some((item) => item.task === pred)) return 'すでにつながっています。';
-  if (dependsOn(pred, succ)) return 'つなぐと先行タスクが循環します。';
+  if (rowById(succ)?.summary) return t('link.errParent');
+  if (taskById(succ).predecessors.some((item) => item.task === pred)) return t('link.errDup');
+  if (dependsOn(pred, succ)) return t('link.errCycle');
   return '';
 }
 
@@ -1649,7 +1880,7 @@ function releaseLink(event) {
   updateLink(event);
   if (!link.moved) {
     link.sticky = true;
-    toast(LINK_HINT[link.dir]);
+    toast(linkHint(link.dir));
     return;
   }
   const over = document.elementsFromPoint(event.clientX, event.clientY).find((el) => el.matches?.('.bar, .sbar'));
@@ -1708,25 +1939,25 @@ function renderPanel() {
   const caret = field && 'selectionStart' in active ? [active.selectionStart, active.selectionEnd] : null;
   const scrollTop = ui.panel.querySelector('.pbody')?.scrollTop ?? 0;
 
-  const close = h('button', { class: 'btn flat square', type: 'button', 'aria-label': '詳細を閉じる', title: '閉じる（Esc）', onclick: closeDetail }, '×');
+  const close = h('button', { class: 'btn flat square', type: 'button', 'aria-label': t('panel.close'), title: t('panel.closeTitle'), onclick: closeDetail }, '×');
   if (link) {
-    ui.panel.replaceChildren(h('div', { class: 'ph' }, h('span', { class: 'pt' }, `依存関係  #${rowById(link.from).row} ${taskById(link.from).name} → #${rowById(link.to).row} ${taskById(link.to).name}`), close), h('div', { class: 'pbody' }, linkForm(link)));
+    ui.panel.replaceChildren(h('div', { class: 'ph' }, h('span', { class: 'pt' }, t('panel.linkTitle', { from: `#${rowById(link.from).row} ${taskById(link.from).name}`, to: `#${rowById(link.to).row} ${taskById(link.to).name}` })), close), h('div', { class: 'pbody' }, linkForm(link)));
     ui.panel.querySelector('.pbody').scrollTop = scrollTop;
   } else if (several) {
     const names = [...app.picked].map((id) => taskById(id)?.name).filter(Boolean);
     ui.panel.replaceChildren(
-      h('div', { class: 'ph' }, h('span', { class: 'pt' }, `${names.length} 件のタスクを選択中`), close),
+      h('div', { class: 'ph' }, h('span', { class: 'pt' }, t('panel.several', { count: names.length })), close),
       h(
         'div',
         { class: 'pbody' },
-        h('p', { class: 'hint' }, 'いずれかのバーをドラッグすると、選択中のタスクを相対位置のまま一緒に動かせます。Esc で選択を 1 件に戻します。'),
+        h('p', { class: 'hint' }, t('panel.severalHint')),
         h('ul', { class: 'picked' }, ...names.map((name) => h('li', {}, name))),
       ),
     );
   } else {
     const task = taskById(row.id);
     const { nameInput, quick, more } = taskForm(row);
-    const toggle = h('button', { class: 'btn more-btn', type: 'button', 'aria-expanded': String(app.moreOpen), title: '日程・担当・色・先行タスクを表示 / 非表示', onclick: toggleMore }, app.moreOpen ? '▾ 詳細設定' : '▸ 詳細設定');
+    const toggle = h('button', { class: 'btn more-btn', type: 'button', 'aria-expanded': String(app.moreOpen), title: t('panel.moreTitle'), onclick: toggleMore }, `${app.moreOpen ? '▾' : '▸'} ${t('panel.more')}`);
     ui.panel.replaceChildren(h('div', { class: 'ph' }, h('span', { class: 'pno', title: task.name }, `#${row.row}`), nameInput, toggle, close), h('div', { class: 'pbody' }, quick, app.moreOpen ? more : null));
     ui.panel.querySelector('.pbody').scrollTop = scrollTop;
   }
@@ -1765,7 +1996,7 @@ function linkForm(link) {
     'div',
     { class: 'form' },
     labeled(
-      'ラグ（稼働日。0 以上）',
+      t('linkForm.lag'),
       h('input', {
         type: 'number',
         min: '0',
@@ -1776,19 +2007,19 @@ function linkForm(link) {
         onchange: (event) => {
           const lag = Number(event.target.value);
           if (event.target.value !== '' && Number.isInteger(lag) && lag >= 0 && lag <= 999) commit(lag);
-          else revert('ラグは 0〜999 の整数で入力してください。');
+          else revert(t('linkForm.errLag'));
         },
       }),
     ),
-    h('div', { class: 'lbl' }, '先行タスクの終了', h('span', { class: 'path' }, `${formatDate(rowFrom.endDay)}（${from.name}）`)),
-    h('div', { class: 'lbl' }, '後続タスクの開始', h('span', { class: 'path' }, `${formatDate(rowTo.startDay)}（${to.name}）`)),
-    h('p', { class: 'hint wide' }, '後続タスクは、先行タスクの終了の翌稼働日にラグを足した日以降に始まります。先行タスクが複数あるときは、いちばん遅いものに合わせます。'),
+    h('div', { class: 'lbl' }, t('linkForm.predEnd'), h('span', { class: 'path' }, `${formatDate(rowFrom.endDay)} (${from.name})`)),
+    h('div', { class: 'lbl' }, t('linkForm.succStart'), h('span', { class: 'path' }, `${formatDate(rowTo.startDay)} (${to.name})`)),
+    h('p', { class: 'hint wide' }, t('linkForm.hint')),
     h(
       'div',
       { class: 'wide row-actions' },
-      h('button', { class: 'btn danger', type: 'button', onclick: deleteLink }, 'この依存関係を削除'),
-      h('button', { class: 'btn', type: 'button', onclick: () => showDetail(link.from) }, '先行タスクを開く'),
-      h('button', { class: 'btn', type: 'button', onclick: () => showDetail(link.to) }, '後続タスクを開く'),
+      h('button', { class: 'btn danger', type: 'button', onclick: deleteLink }, t('linkForm.delete')),
+      h('button', { class: 'btn', type: 'button', onclick: () => showDetail(link.from) }, t('linkForm.openPred')),
+      h('button', { class: 'btn', type: 'button', onclick: () => showDetail(link.to) }, t('linkForm.openSucc')),
     ),
   );
 }
@@ -1818,7 +2049,7 @@ function taskForm(row) {
     value: String(percent),
     disabled: parent,
     'data-field': 'progress',
-    'aria-label': '進捗',
+    'aria-label': t('panel.progress'),
     oninput: (event) => {
       output.textContent = `${event.target.value}%`;
     },
@@ -1839,15 +2070,15 @@ function taskForm(row) {
         step: '1',
         value: String(pred.lag),
         'data-field': `lag-${i}`,
-        'aria-label': `${label} のラグ（稼働日）`,
+        'aria-label': t('panel.predLagAria', { label }),
         onchange: (event) => commit({ predecessors: task.predecessors.map((item, j) => (j === i ? { task: item.task, lag: Math.trunc(Number(event.target.value)) || 0 } : item)) }),
       }),
-      h('button', { class: 'btn flat square', type: 'button', 'aria-label': `先行タスク ${label} を外す`, onclick: () => commit({ predecessors: task.predecessors.filter((_, j) => j !== i) }) }, '×'),
+      h('button', { class: 'btn flat square', type: 'button', 'aria-label': t('panel.predRemove', { label }), onclick: () => commit({ predecessors: task.predecessors.filter((_, j) => j !== i) }) }, '×'),
     );
   });
   const candidates = tasks().filter((item) => item.id !== task.id && !task.predecessors.some((pred) => pred.task === item.id));
-  const pick = h('select', { 'data-field': 'pred-pick', 'aria-label': '先行タスクを選択' }, h('option', { value: '' }, 'タスクを選択'), ...candidates.map((item) => h('option', { value: item.id }, `#${rowById(item.id).row} ${item.name}`)));
-  const lag = h('input', { type: 'number', min: '0', max: '999', step: '1', value: '0', 'data-field': 'pred-lag', 'aria-label': '追加する先行タスクのラグ（稼働日）' });
+  const pick = h('select', { 'data-field': 'pred-pick', 'aria-label': t('panel.predPickAria') }, h('option', { value: '' }, t('panel.predPick')), ...candidates.map((item) => h('option', { value: item.id }, `#${rowById(item.id).row} ${item.name}`)));
+  const lag = h('input', { type: 'number', min: '0', max: '999', step: '1', value: '0', 'data-field': 'pred-lag', 'aria-label': t('panel.predLagAddAria') });
 
   const nameInput = h('input', {
     class: 'pname',
@@ -1855,16 +2086,16 @@ function taskForm(row) {
     value: task.name,
     maxlength: '200',
     'data-field': 'name',
-    'aria-label': 'タスク名',
-    onchange: (event) => (event.target.value.trim() ? commit({ name: event.target.value }) : revert('タスク名は空にできません。')),
+    'aria-label': t('panel.name'),
+    onchange: (event) => (event.target.value.trim() ? commit({ name: event.target.value }) : revert(t('panel.errName'))),
   });
   // What is entered day to day (progress, effort, note) is always at hand; the rest opens with the button in the header.
   const quick = h(
     'div',
     { class: 'quick form' },
-    h('div', { class: 'lbl' }, '進捗', h('div', { class: 'range' }, rangeInput, output)),
+    h('div', { class: 'lbl' }, t('panel.progress'), h('div', { class: 'range' }, rangeInput, output)),
     labeled(
-      '工数 (h)',
+      t('panel.effort'),
       h('input', {
         type: 'number',
         min: '0',
@@ -1872,44 +2103,46 @@ function taskForm(row) {
         value: task.effort === null ? '' : String(task.effort),
         disabled: parent,
         'data-field': 'effort',
-        onchange: (event) => (event.target.value === '' ? commit({ effort: null }) : Number(event.target.value) >= 0 ? commit({ effort: Number(event.target.value) }) : revert('工数は 0 以上の数値で入力してください。')),
+        onchange: (event) => (event.target.value === '' ? commit({ effort: null }) : Number(event.target.value) >= 0 ? commit({ effort: Number(event.target.value) }) : revert(t('panel.errEffort'))),
       }),
     ),
-    labeled('メモ', h('textarea', { 'data-field': 'note', maxlength: '2000', onchange: (event) => commit({ note: event.target.value }) }, task.note), 'note'),
-    parent ? h('p', { class: 'hint note-hint' }, '子タスクを持つタスクの日付・進捗・工数は、子タスクから自動で決まります。') : null,
+    labeled(t('panel.note'), h('textarea', { 'data-field': 'note', maxlength: '2000', onchange: (event) => commit({ note: event.target.value }) }, task.note), 'note'),
+    parent ? h('p', { class: 'hint note-hint' }, t('panel.parentHint')) : null,
   );
+  const milestone = row.milestone;
   const more = h(
     'div',
     { class: 'form more' },
     h(
       'div',
       { class: 'pair wide' },
-      labeled('開始', h('input', { type: 'date', value: formatDate(row.startDay), disabled: parent, 'data-field': 'start', onchange: (event) => (event.target.value ? commit({ start: event.target.value }) : revert('開始日を入力してください。')) })),
-      labeled('終了', h('input', { type: 'date', value: formatDate(row.endDay), disabled: parent, 'data-field': 'end', onchange: (event) => (event.target.value ? commit({ end: event.target.value }) : revert('終了日を入力してください。')) })),
+      labeled(t('panel.start'), h('input', { type: 'date', value: formatDate(row.startDay), disabled: parent, 'data-field': 'start', onchange: (event) => (event.target.value ? commit({ start: event.target.value }) : revert(t('panel.errStart'))) })),
+      labeled(t('panel.end'), h('input', { type: 'date', value: formatDate(row.endDay), disabled: parent || milestone, 'data-field': 'end', onchange: (event) => (event.target.value ? commit({ end: event.target.value }) : revert(t('panel.errEnd'))) })),
     ),
     labeled(
-      '期間（稼働日。例: 3d, 2w）',
+      t('panel.duration'),
       h('input', {
         type: 'text',
         value: formatDuration(row.duration),
-        disabled: parent,
+        disabled: parent || milestone,
         'data-field': 'duration',
-        onchange: (event) => (parseDuration(event.target.value) !== null ? commit({ duration: event.target.value }) : revert('期間は「3d」「2w」のように入力してください。')),
+        onchange: (event) => (parseDuration(event.target.value) !== null ? commit({ duration: event.target.value }) : revert(t('panel.errDuration'))),
       }),
     ),
-    labeled('担当（カンマ区切り）', h('input', { type: 'text', value: task.resources.join(', '), 'data-field': 'resources', onchange: (event) => commit({ resources: event.target.value }) })),
+    h('label', { class: 'check' }, h('input', { type: 'checkbox', checked: milestone, disabled: parent, 'data-field': 'milestone', onchange: (event) => commit({ milestone: event.target.checked }) }), t('panel.milestone')),
+    labeled(t('panel.resources'), h('input', { type: 'text', value: task.resources.join(', '), 'data-field': 'resources', onchange: (event) => commit({ resources: event.target.value }) })),
     h(
       'div',
       { class: 'lbl wide' },
-      '色ラベル',
-      h('div', { class: 'swatches', role: 'group', 'aria-label': '色ラベル' }, ...COLORS.map((color) => h('button', { class: `swatch c-${color}`, type: 'button', 'aria-pressed': String(task.color === color), onclick: () => commit({ color }) }, h('i'), COLOR_NAME[color]))),
+      t('tb.color'),
+      h('div', { class: 'swatches', role: 'group', 'aria-label': t('tb.color') }, ...COLORS.map((color) => h('button', { class: `swatch c-${color}`, type: 'button', 'aria-pressed': String(task.color === color), onclick: () => commit({ color }) }, h('i'), colorName(color)))),
       parent
-        ? h('span', {}, '色は配下のタスクの既定の色になります。選ぶと、配下のタスクに個別に付けた色は「なし」に戻ります。')
+        ? h('span', {}, t('panel.colorParent'))
         : task.color === 'none' && colorOf(row) !== 'none'
-          ? h('span', {}, `色が「なし」のため、親タスクの色（${COLOR_NAME[colorOf(row)]}）で表示しています。`)
+          ? h('span', {}, t('panel.colorInherited', { name: colorName(colorOf(row)) }))
           : null,
     ),
-    parent ? null : h('div', { class: 'lbl wide' }, '先行タスク（終了の翌稼働日 + ラグ）', ...predecessors, h('div', { class: 'pred-add' }, pick, lag, h('button', { class: 'btn', type: 'button', onclick: () => pick.value && commit({ predecessors: [...task.predecessors, { task: pick.value, lag: Math.trunc(Number(lag.value)) || 0 }] }) }, '追加'))),
+    parent ? null : h('div', { class: 'lbl wide' }, t('panel.predecessors'), ...predecessors, h('div', { class: 'pred-add' }, pick, lag, h('button', { class: 'btn', type: 'button', onclick: () => pick.value && commit({ predecessors: [...task.predecessors, { task: pick.value, lag: Math.trunc(Number(lag.value)) || 0 }] }) }, t('panel.predAdd')))),
   );
   return { nameInput, quick, more };
 }
@@ -1919,8 +2152,8 @@ function taskForm(row) {
 function openProject() {
   const { project } = app.state.doc;
   const error = h('p', { class: 'err', role: 'alert', hidden: true });
-  const name = h('input', { type: 'text', value: project.name, maxlength: '200', 'aria-label': 'プロジェクト名' });
-  const holidays = h('textarea', { spellcheck: 'false', placeholder: '2026-11-23', 'aria-label': '休日' }, project.holidays.join('\n'));
+  const name = h('input', { type: 'text', value: project.name, maxlength: '200', 'aria-label': t('project.name') });
+  const holidays = h('textarea', { spellcheck: 'false', placeholder: '2026-11-23', 'aria-label': t('project.holidaysAria') }, project.holidays.join('\n'));
   // Shows what was saved (the server trims and sorts), or what is still saved when the edit was refused.
   const show = () => {
     const saved = app.state.doc.project;
@@ -1938,11 +2171,11 @@ function openProject() {
   name.addEventListener('change', () => save({ name: name.value }));
   holidays.addEventListener('change', () => save({ holidays: holidays.value.split(/[\s,]+/).filter(Boolean) }));
   ui.project.replaceChildren(
-    h('div', { class: 'dh' }, h('span', { id: 'project-title' }, 'プロジェクト設定'), h('button', { class: 'btn flat square', type: 'button', 'aria-label': '閉じる', onclick: () => ui.project.close() }, '×')),
+    h('div', { class: 'dh' }, h('span', { id: 'project-title' }, t('project.title')), h('button', { class: 'btn flat square', type: 'button', 'aria-label': t('dlg.close'), onclick: () => ui.project.close() }, '×')),
     h(
       'div',
       { class: 'db' },
-      h('div', { class: 'form', style: { padding: '0' } }, labeled('プロジェクト名', name), labeled('休日（1 行に 1 日、YYYY-MM-DD）', holidays), error, h('p', { class: 'hint' }, '土曜と日曜は休みです。期間は稼働日（土日と休日を除く日）で数えます。'), h('div', { class: 'lbl' }, 'ファイル', h('span', { class: 'path' }, app.state.file.path))),
+      h('div', { class: 'form', style: { padding: '0' } }, labeled(t('project.name'), name), labeled(t('project.holidays'), holidays), error, h('p', { class: 'hint' }, t('project.hint')), h('div', { class: 'lbl' }, t('project.file'), h('span', { class: 'path' }, app.state.file.path))),
     ),
   );
   if (!ui.project.open) ui.project.showModal();
@@ -1956,7 +2189,7 @@ function openVersions() {
 }
 
 function renderVersions() {
-  const name = h('input', { type: 'text', maxlength: '200', placeholder: '名前（省略すると日時）', 'aria-label': 'バージョンの名前' });
+  const name = h('input', { type: 'text', maxlength: '200', placeholder: t('versions.namePlaceholder'), 'aria-label': t('versions.nameAria') });
   const list = app.state.versions.length
     ? h(
         'ul',
@@ -1965,28 +2198,28 @@ function renderVersions() {
           h(
             'li',
             {},
-            h('div', { class: 'info' }, h('div', { class: 'vname', title: version.name }, version.name), h('div', { class: 'vmeta' }, `${new Date(version.createdAt).toLocaleString('ja-JP')} ・ ${version.taskCount} タスク`)),
+            h('div', { class: 'info' }, h('div', { class: 'vname', title: version.name }, version.name), h('div', { class: 'vmeta' }, t('versions.meta', { date: new Date(version.createdAt).toLocaleString(getLocale()), count: version.taskCount }))),
             h(
               'button',
               {
                 class: 'btn',
                 type: 'button',
                 onclick: async () => {
-                  if (await confirmDialog(`「${version.name}」の状態に戻します。現在の状態は「復元前（自動）」として残ります。`, '復元')) {
-                    await send([{ op: 'restore', id: version.id }]);
+                  if (await confirmDialog(t('versions.restoreConfirm', { name: version.name }), t('versions.restore'))) {
+                    await send([{ op: 'restore_version', id: version.id }]);
                     ui.versions.close();
                   }
                 },
               },
-              '復元',
+              t('versions.restore'),
             ),
-            h('button', { class: 'btn danger', type: 'button', 'aria-label': `${version.name} を削除`, onclick: () => send([{ op: 'delete_snapshot', id: version.id }]) }, '削除'),
+            h('button', { class: 'btn danger', type: 'button', 'aria-label': t('versions.deleteAria', { name: version.name }), onclick: () => send([{ op: 'delete_version', id: version.id }]) }, t('versions.delete')),
           ),
         ),
       )
-    : h('p', { class: 'hint', style: { padding: '0' } }, '保存したバージョンはまだありません。');
+    : h('p', { class: 'hint', style: { padding: '0' } }, t('versions.none'));
   ui.versions.replaceChildren(
-    h('div', { class: 'dh' }, h('span', { id: 'versions-title' }, 'バージョン'), h('button', { class: 'btn flat square', type: 'button', 'aria-label': '閉じる', onclick: () => ui.versions.close() }, '×')),
+    h('div', { class: 'dh' }, h('span', { id: 'versions-title' }, t('versions.title')), h('button', { class: 'btn flat square', type: 'button', 'aria-label': t('dlg.close'), onclick: () => ui.versions.close() }, '×')),
     h(
       'div',
       { class: 'db' },
@@ -1996,11 +2229,11 @@ function renderVersions() {
           class: 'add',
           onsubmit: async (event) => {
             event.preventDefault();
-            await send([{ op: 'snapshot', ...(name.value.trim() ? { name: name.value.trim() } : {}) }]);
+            await send([{ op: 'save_version', ...(name.value.trim() ? { name: name.value.trim() } : {}) }]);
           },
         },
         name,
-        h('button', { class: 'btn primary', type: 'submit' }, '現在の状態を保存'),
+        h('button', { class: 'btn primary', type: 'submit' }, t('versions.save')),
       ),
       list,
     ),
@@ -2053,8 +2286,32 @@ document.addEventListener('keydown', (event) => {
     deleteLink();
     return;
   }
+  if (isTyping(event.target)) return;
+  const key = event.key.toLowerCase();
+  const command = (event.ctrlKey || event.metaKey) && !event.altKey;
+  // Undo / redo (a text field keeps its own undo), duplicate, and moving the selected task up or down.
+  if (command && key === 'z') {
+    event.preventDefault();
+    stepHistory(event.shiftKey ? 'redo' : 'undo');
+    return;
+  }
+  if (command && key === 'y') {
+    event.preventDefault();
+    stepHistory('redo');
+    return;
+  }
+  if (command && key === 'd' && !event.shiftKey && app.picked.size) {
+    event.preventDefault();
+    duplicateTasks([...app.picked]);
+    return;
+  }
+  if (event.altKey && !event.ctrlKey && !event.metaKey && !event.shiftKey && (event.key === 'ArrowUp' || event.key === 'ArrowDown') && app.picked.size === 1) {
+    event.preventDefault();
+    operate('shift', { direction: event.key === 'ArrowUp' ? 'up' : 'down' });
+    return;
+  }
   // Ctrl+Up / Ctrl+Down zoom in / out by a step, for the keyboard (Ctrl+scroll does the same with the pointer as the center).
-  if (!event.ctrlKey || event.altKey || event.shiftKey || event.metaKey || isTyping(event.target)) return;
+  if (!event.ctrlKey || event.altKey || event.shiftKey || event.metaKey) return;
   if (event.key !== 'ArrowUp' && event.key !== 'ArrowDown') return;
   event.preventDefault();
   zoomBy(event.key === 'ArrowUp' ? 1.25 : 0.8, null);
@@ -2068,11 +2325,15 @@ window.addEventListener('resize', () => {
 
 ui.today.append(icon('today'));
 ui.today.addEventListener('click', scrollToToday);
+ui.fit.append(icon('fit'));
+ui.fit.addEventListener('click', fitAll);
 
+applyLocale();
+syncLocale();
 buildToolbar();
 try {
   applyState(await (await fetch('/api/state')).json());
 } catch {
-  toast('サーバーに接続できません。キャンバスを開き直してください。', 'error');
+  toast(t('net.offline'), 'error');
 }
 new EventSource('/events').addEventListener('state', (event) => applyState(JSON.parse(event.data)));

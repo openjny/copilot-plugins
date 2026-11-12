@@ -1,10 +1,22 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { applyOps, describe, emptyDoc, finalize, formatDate, makeCalendar, maxSlideEarlier, parseDate, parseDuration, readDoc, schedule, serializeDoc } from '../lib/model.mjs';
+import { SCHEMA, readDoc, serializeDoc, toTree } from '../lib/format.mjs';
+import { setLocale } from '../lib/i18n.mjs';
+import { MAX_DURATION, MAX_LAG, MAX_LEVEL, MAX_TASKS, MAX_VERSIONS, applyOps, describe, emptyDoc, finalize, formatDate, makeCalendar, maxSlideEarlier, parseDate, parseDuration, schedule } from '../lib/model.mjs';
 
+setLocale('en');
 const NOW = new Date(2026, 10, 12, 9, 30);
 const ops = (doc, list) => applyOps(doc, list, { now: NOW }).doc;
 const day = (text) => parseDate(text);
+/** The node with this id in the file's task tree. */
+const nodeOf = (nodes, id) => {
+  for (const node of nodes) {
+    if (node.id === id) return node;
+    const found = node.children && nodeOf(node.children, id);
+    if (found) return found;
+  }
+  return undefined;
+};
 
 /** The chart from the reference screenshot: 設計 (要件定義, 基本設計, 設計レビュー) and 実装. */
 function sample() {
@@ -83,8 +95,8 @@ test('moving a dependent task earlier only lowers the lag of the predecessor tha
 test('a negative lag is rejected when editing and when reading a file', () => {
   assert.throws(() => ops(sample(), [{ op: 'update', id: 'd', predecessors: [{ task: 'c', lag: -1 }] }]), (error) => error.code === 'invalid_input' && /lag/.test(error.message));
   const raw = JSON.parse(serializeDoc(sample()));
-  raw.tasks.find((task) => task.id === 'd').predecessors = [{ task: 'c', lag: -1 }];
-  assert.throws(() => readDoc(raw), (error) => error.code === 'invalid_file' && /lag/.test(error.message));
+  nodeOf(raw.tasks, 'd').predecessors = [{ task: 'c', lag: -1 }];
+  assert.throws(() => readDoc(raw), (error) => error.code === 'invalid_file' && /lag/.test(error.message) && /task d/.test(error.message));
 });
 
 test('slide moves tasks together by working days and keeps their positions relative to each other', () => {
@@ -145,7 +157,7 @@ test('an end date sets the duration in working days', () => {
 });
 
 test('end and duration together are rejected', () => {
-  assert.throws(() => ops(sample(), [{ op: 'update', id: 'e', end: '2026-12-01', duration: 2 }]), /同時/);
+  assert.throws(() => ops(sample(), [{ op: 'update', id: 'e', end: '2026-12-01', duration: 2 }]), (error) => error.key === 'err.endAndDuration');
 });
 
 test('a dependency cycle is rejected and the document stays unchanged', () => {
@@ -196,34 +208,128 @@ test('holidays change the working days', () => {
 });
 
 test('versions restore the earlier state and keep an automatic backup', () => {
-  let doc = ops(sample(), [{ op: 'snapshot', name: 'v1' }]);
+  let doc = ops(sample(), [{ op: 'save_version', name: 'first' }]);
   doc = ops(doc, [{ op: 'delete', id: 'e' }]);
   assert.equal(doc.tasks.length, 4);
-  const id = doc.snapshots[0].id;
-  doc = ops(doc, [{ op: 'restore', id }]);
+  const id = doc.versions[0].id;
+  assert.equal(id, 'v1');
+  doc = ops(doc, [{ op: 'restore_version', id }]);
   assert.equal(doc.tasks.length, 5);
-  assert.equal(doc.snapshots.length, 2);
-  assert.match(doc.snapshots[1].name, /^復元前/);
+  assert.equal(doc.versions.length, 2);
+  assert.match(doc.versions[1].name, /^Before restore/);
+  assert.equal(ops(doc, [{ op: 'delete_version', id: 'v2' }]).versions.length, 1);
 });
 
-test('the file text round-trips and stays one task per line', () => {
+test('the file keeps the tasks as a tree, one task per line, and round-trips', () => {
   const doc = sample();
   const text = serializeDoc(doc);
-  assert.equal(text.split('\n').filter((line) => line.includes('"level"')).length, 5);
+  const raw = JSON.parse(text);
+  assert.equal(raw.version, 2);
+  assert.match(raw.$schema, /gantt-chart\.schema\.json$/);
+  assert.deepEqual(raw.tasks.map((task) => task.id), ['a', 'e']);
+  assert.deepEqual(raw.tasks[0].children.map((task) => task.id), ['b', 'c', 'd']);
+  // A parent has no dates of its own; a leaf has no "level".
+  assert.deepEqual(Object.keys(raw.tasks[0]), ['id', 'name', 'children']);
+  assert.equal(raw.tasks[1].level, undefined);
+  assert.deepEqual(nodeOf(raw.tasks, 'd').predecessors, [{ task: 'c' }]);
+  assert.equal(text.split('\n').filter((line) => line.includes('"id":')).length, 5);
   assert.equal(serializeDoc(readDoc(JSON.parse(text))), text);
+  assert.deepEqual(toTree(readDoc(raw).tasks), raw.tasks);
 });
 
-test('reading rejects other documents, newer versions and broken outlines', () => {
+test('the limits in the schema are the ones the model enforces', () => {
+  const leaf = SCHEMA.$defs.leafTask.properties;
+  assert.equal(SCHEMA.properties.tasks.maxItems, MAX_TASKS);
+  assert.equal(SCHEMA.properties.versions.maxItems, MAX_VERSIONS);
+  assert.equal(leaf.duration.maximum, MAX_DURATION);
+  assert.equal(SCHEMA.$defs.dependency.properties.lag.maximum, MAX_LAG);
+  assert.deepEqual(SCHEMA.$defs.color.enum, ['none', 'green', 'orange', 'red', 'purple', 'teal', 'gray']);
+  assert.equal(new RegExp(SCHEMA.$defs.id.pattern).test('a-B_9'), true);
+  assert.equal(SCHEMA.properties.version.const, 2);
+  assert.ok(MAX_LEVEL >= 8);
+});
+
+test('reading rejects other documents and other versions', () => {
   assert.throws(() => readDoc({ format: 'other' }), (error) => error.code === 'invalid_file');
-  assert.throws(() => readDoc({ format: 'openjny-gantt-chart', version: 2 }), (error) => error.code === 'unsupported_version');
-  const doc = JSON.parse(serializeDoc(sample()));
-  doc.tasks[0].level = 2;
-  assert.throws(() => readDoc(doc), (error) => error.code === 'invalid_file' && /level/.test(error.message));
+  assert.throws(() => readDoc({ format: 'openjny-gantt-chart', version: 1 }), (error) => error.code === 'unsupported_version');
+});
+
+test('reading says where the file breaks the schema', () => {
+  const broken = (change) => {
+    const raw = JSON.parse(serializeDoc(sample()));
+    change(raw);
+    return () => readDoc(raw);
+  };
+  // A leaf needs its dates; a parent must not have them.
+  assert.throws(broken((raw) => delete nodeOf(raw.tasks, 'e').start), (error) => error.code === 'invalid_file' && /tasks\[1\] \(task e\) is missing "start"/.test(error.message));
+  assert.throws(broken((raw) => (raw.tasks[0].start = '2026-11-16')), (error) => /tasks\[0\]\.start/.test(error.message) && /not allowed/.test(error.message));
+  assert.throws(broken((raw) => (nodeOf(raw.tasks, 'e').duration = 0)), (error) => /duration/.test(error.message) && /at least 1/.test(error.message));
+  assert.throws(broken((raw) => (nodeOf(raw.tasks, 'e').color = 'pink')), (error) => /one of: none, green/.test(error.message));
+  assert.throws(broken((raw) => (raw.tasks[0].children = [])), (error) => /at least 1 items/.test(error.message));
+  assert.throws(broken((raw) => (nodeOf(raw.tasks, 'e').start = '2026-02-30')), (error) => /valid date/.test(error.message));
+  // A milestone lasts one day.
+  assert.throws(broken((raw) => Object.assign(nodeOf(raw.tasks, 'e'), { milestone: true, duration: 2 })), (error) => /duration/.test(error.message) && /must be 1/.test(error.message));
+});
+
+test('reading checks what a schema cannot: ids, predecessors and cycles', () => {
+  const broken = (change) => {
+    const raw = JSON.parse(serializeDoc(sample()));
+    change(raw);
+    return () => readDoc(raw);
+  };
+  assert.throws(broken((raw) => (nodeOf(raw.tasks, 'e').id = 'b')), (error) => error.code === 'invalid_file' && /used twice/.test(error.message));
+  assert.throws(broken((raw) => (nodeOf(raw.tasks, 'e').predecessors = [{ task: 'zzz' }])), (error) => error.code === 'invalid_file' && /does not exist/.test(error.message));
+  assert.throws(broken((raw) => (nodeOf(raw.tasks, 'e').predecessors = [{ task: 'e' }])), (error) => error.code === 'invalid_file' && /its own predecessor/.test(error.message));
+  assert.throws(broken((raw) => (nodeOf(raw.tasks, 'b').predecessors = [{ task: 'd' }])), (error) => error.code === 'cycle');
+  assert.throws(broken((raw) => (nodeOf(raw.tasks, 'e').predecessors = [{ task: 'b' }, { task: 'b' }])), (error) => /listed twice/.test(error.message));
+});
+
+test('messages follow the chosen language', () => {
+  try {
+    setLocale('ja');
+    assert.throws(() => ops(sample(), [{ op: 'update', id: 'a', progress: 50 }]), (error) => error.code === 'summary_field' && /子タスクを持つ/.test(error.message));
+    assert.equal(ops(emptyDoc(), [{ op: 'add' }]).tasks[0].name, '新しいタスク');
+    setLocale('en');
+    assert.equal(ops(emptyDoc(), [{ op: 'add' }]).tasks[0].name, 'New task');
+  } finally {
+    setLocale('en');
+  }
+});
+
+test('milestones last one day, cannot be parents, and show in the description', () => {
+  let doc = ops(sample(), [{ op: 'update', id: 'e', milestone: true }]);
+  const e = doc.tasks.find((task) => task.id === 'e');
+  assert.deepEqual([e.milestone, e.duration], [true, 1]);
+  assert.equal(describe(doc).tasks.find((task) => task.id === 'e').isMilestone, true);
+  assert.throws(() => ops(doc, [{ op: 'update', id: 'e', duration: 3 }]), (error) => error.key === 'err.milestoneDuration');
+  assert.throws(() => ops(sample(), [{ op: 'update', id: 'a', milestone: true }]), (error) => error.code === 'summary_field');
+  // A milestone that gets a child stops being one.
+  doc = ops(doc, [{ op: 'add', id: 'f', name: 'F', parent: 'e' }]);
+  assert.equal(doc.tasks.find((task) => task.id === 'e').milestone, false);
+  assert.equal(nodeOf(JSON.parse(serializeDoc(ops(sample(), [{ op: 'update', id: 'e', milestone: true }]))).tasks, 'e').milestone, true);
+});
+
+test('duplicate copies a task with its children and keeps the links among the copies', () => {
+  const run = applyOps(sample(), [{ op: 'duplicate', id: 'a' }], { now: NOW });
+  const ids = run.doc.tasks.map((task) => task.id);
+  assert.deepEqual(ids.slice(0, 4), ['a', 'b', 'c', 'd']);
+  assert.equal(run.results[0].copy, 't1');
+  assert.deepEqual(run.results[0].ids, ['t1', 't2', 't3', 't4']);
+  assert.deepEqual(run.doc.tasks.slice(4, 8).map((task) => [task.id, task.name, task.level]), [['t1', '設計', 0], ['t2', '要件定義', 1], ['t3', '基本設計', 1], ['t4', '設計レビュー', 1]]);
+  // t3 follows t2 (the copy of b), not b.
+  assert.deepEqual(run.doc.tasks.find((task) => task.id === 't3').predecessors, [{ task: 't2', lag: 0 }]);
+  assert.equal(ids[8], 'e');
+  const single = applyOps(sample(), [{ op: 'duplicate', id: 'e' }], { now: NOW }).doc;
+  assert.deepEqual(single.tasks.map((task) => task.id).slice(-2), ['e', 't1']);
+  assert.equal(single.tasks.at(-1).start, '2026-11-25');
+  // A copy waits for the same outside predecessors as the original.
+  const copy = applyOps(sample(), [{ op: 'duplicate', id: 'd' }], { now: NOW }).doc.tasks.find((task) => task.id === 't1');
+  assert.deepEqual(copy.predecessors, [{ task: 'c', lag: 0 }]);
 });
 
 test('finalize repairs the dates stored in a hand-edited file', () => {
   const raw = JSON.parse(serializeDoc(sample()));
-  raw.tasks[2].start = '2026-01-01';
+  nodeOf(raw.tasks, 'c').start = '2026-01-01';
   const doc = readDoc(raw);
   assert.equal(doc.tasks[2].start, '2026-11-18');
   assert.equal(finalize(doc).rows[2].startDay, day('2026-11-18'));

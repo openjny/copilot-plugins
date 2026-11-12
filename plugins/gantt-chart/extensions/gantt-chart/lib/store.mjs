@@ -2,7 +2,9 @@ import { createHash, randomBytes } from 'node:crypto';
 import { promises as fs } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { ModelError, emptyDoc, readDoc } from './model.mjs';
+import { readDoc } from './format.mjs';
+import { LOCALE_CHOICES, t } from './i18n.mjs';
+import { ModelError, emptyDoc, fail } from './model.mjs';
 
 export const CANVAS_ID = 'openjny-gantt-chart';
 const RECENT_FORMAT = 'openjny-gantt-chart-recent';
@@ -15,15 +17,13 @@ export const hashText = (text) => createHash('sha1').update(text).digest('hex');
 
 /** Resolves a user-supplied chart path against the session's working directory. */
 export function resolveChartPath(input, baseDir) {
-  if (typeof input !== 'string' || !input.trim()) throw new ModelError('invalid_path', 'path は空でない文字列で指定してください。');
+  if (typeof input !== 'string' || !input.trim()) fail('invalid_path', 'err.pathRequired');
   const file = path.resolve(baseDir || process.cwd(), input.trim());
-  if (path.extname(file).toLowerCase() !== '.json') {
-    throw new ModelError('invalid_path', 'ファイル名の拡張子は .json にしてください（例: plan.gantt.json）。');
-  }
+  if (path.extname(file).toLowerCase() !== '.json') fail('invalid_path', 'err.pathExt');
   return file;
 }
 
-const ioError = (error, what) => new ModelError('io_error', `${what}に失敗しました: ${error?.message ?? error}`);
+const ioError = (error, whatKey) => new ModelError('io_error', t('err.io', { what: t(whatKey), message: error?.message ?? error }), 'err.io');
 
 /** Reads and validates a chart file. An empty file counts as a new chart. */
 export async function readChartFile(file) {
@@ -31,8 +31,8 @@ export async function readChartFile(file) {
   try {
     text = await fs.readFile(file, 'utf8');
   } catch (error) {
-    if (error?.code === 'ENOENT') throw new ModelError('file_missing', 'ファイルが見つかりません。');
-    throw ioError(error, 'ファイルの読み込み');
+    if (error?.code === 'ENOENT') fail('file_missing', 'err.fileMissing');
+    throw ioError(error, 'io.readFile');
   }
   const hash = hashText(text);
   const body = text.replace(/^\uFEFF/, '');
@@ -41,12 +41,12 @@ export async function readChartFile(file) {
   try {
     raw = JSON.parse(body);
   } catch (error) {
-    throw new ModelError('file_invalid', `JSON として読み込めません: ${error.message}`);
+    fail('file_invalid', 'err.jsonParse', { message: error.message });
   }
   try {
     return { doc: readDoc(raw), hash };
   } catch (error) {
-    throw error instanceof ModelError ? new ModelError('file_invalid', error.message) : error;
+    throw error instanceof ModelError ? new ModelError('file_invalid', error.message, error.key, error.params) : error;
   }
 }
 
@@ -76,7 +76,7 @@ export async function writeAtomic(file, text) {
     }
   } catch (error) {
     await fs.rm(temp, { force: true }).catch(() => {});
-    throw ioError(error, 'ファイルの保存');
+    throw ioError(error, 'io.writeFile');
   }
 }
 
@@ -85,7 +85,7 @@ export async function createChartFile(file, text) {
   try {
     if (!(await fs.stat(path.dirname(file))).isDirectory()) throw new Error('not a directory');
   } catch {
-    throw new ModelError('invalid_path', `保存先のフォルダーが存在しません: ${path.dirname(file)}`);
+    fail('invalid_path', 'err.noFolder', { dir: path.dirname(file) });
   }
   await writeAtomic(file, text);
 }
@@ -113,7 +113,7 @@ export async function loadRecent(log = () => {}) {
   try {
     text = await fs.readFile(recentFile(), 'utf8');
   } catch (error) {
-    if (error?.code !== 'ENOENT') log(`最近使ったファイルを読み込めません: ${error.message}`);
+    if (error?.code !== 'ENOENT') log(`Cannot read the recent files list: ${error.message}`);
     return [];
   }
   try {
@@ -124,7 +124,7 @@ export async function loadRecent(log = () => {}) {
     // Keep the unreadable file for the user instead of overwriting it, and start a new list.
     const kept = `${recentFile()}.corrupt-${Date.now()}`;
     await fs.rename(recentFile(), kept).catch(() => {});
-    log(`最近使ったファイルの一覧が壊れていたため ${kept} に退避しました: ${error.message}`);
+    log(`The recent files list was damaged; moved it to ${kept}: ${error.message}`);
     return [];
   }
 }
@@ -136,31 +136,37 @@ export async function rememberRecent(file, log = () => {}) {
     await fs.mkdir(dataDir(), { recursive: true });
     await writeAtomic(recentFile(), `${JSON.stringify({ format: RECENT_FORMAT, version: 1, items: items.slice(0, RECENT_MAX) }, null, 2)}\n`);
   } catch (error) {
-    log(`最近使ったファイルを保存できません: ${error.message}`);
+    log(`Cannot save the recent files list: ${error.message}`);
   }
 }
 
-// ---- Color theme, kept here because the page's origin (its port) changes on every start -------------------
+// ---- Preferences (color theme, language), kept here because the page's origin (its port) changes on every start --
 
 export const THEMES = ['auto', 'light', 'dark'];
-const themeFile = () => path.join(dataDir(), 'theme.json');
+export const LOCALE_PREFS = LOCALE_CHOICES;
+const prefFile = (name) => path.join(dataDir(), `${name}.json`);
 
-/** Returns the saved theme, or "auto" (follow the OS) when nothing usable is saved. */
-export async function loadTheme() {
+/** Returns a saved choice, or "auto" (follow the OS) when nothing usable is saved. */
+async function loadChoice(name, choices) {
   try {
-    const { theme } = JSON.parse(await fs.readFile(themeFile(), 'utf8'));
-    return THEMES.includes(theme) ? theme : 'auto';
+    const value = JSON.parse(await fs.readFile(prefFile(name), 'utf8'))[name];
+    return choices.includes(value) ? value : 'auto';
   } catch {
     return 'auto';
   }
 }
 
-export async function saveTheme(theme) {
-  if (!THEMES.includes(theme)) throw new ModelError('invalid_request', `theme は ${THEMES.join(' / ')} のいずれかにしてください。`);
+async function saveChoice(name, value, choices) {
+  if (!choices.includes(value)) fail('invalid_request', 'err.badChoice', { name, choices: choices.join(' / ') });
   try {
     await fs.mkdir(dataDir(), { recursive: true });
-    await writeAtomic(themeFile(), `${JSON.stringify({ theme })}\n`);
+    await writeAtomic(prefFile(name), `${JSON.stringify({ [name]: value })}\n`);
   } catch (error) {
-    throw ioError(error, 'テーマの保存');
+    throw ioError(error, 'io.savePref');
   }
 }
+
+export const loadTheme = () => loadChoice('theme', THEMES);
+export const saveTheme = (theme) => saveChoice('theme', theme, THEMES);
+export const loadLocale = () => loadChoice('locale', LOCALE_PREFS);
+export const saveLocale = (locale) => saveChoice('locale', locale, LOCALE_PREFS);

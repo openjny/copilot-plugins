@@ -1,0 +1,131 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://raw.githubusercontent.com/openjny/copilot-plugins/main/plugins/gantt-chart/extensions/gantt-chart/schema/gantt-chart.schema.json",
+  "title": "Gantt chart (openjny-gantt-chart, version 2)",
+  "description": "A Gantt chart: a tree of tasks with dates, dependencies and progress, plus saved versions. A parent task has \"children\" and takes its dates, progress and effort from them; a leaf task has \"start\" and \"duration\". Durations count working days (Saturdays, Sundays and the project's holidays are off). Besides this schema, the program checks that ids are unique, that every predecessor exists, that no task is its own predecessor, and that the dependencies have no cycle.",
+  "type": "object",
+  "required": ["format", "version", "project", "tasks"],
+  "additionalProperties": false,
+  "properties": {
+    "$schema": { "type": "string", "description": "This schema's URL, so that editors can validate and complete the file." },
+    "format": { "const": "openjny-gantt-chart" },
+    "version": { "const": 2, "description": "Version of this file format." },
+    "project": { "$ref": "#/$defs/project" },
+    "tasks": {
+      "type": "array",
+      "maxItems": 2000,
+      "description": "The top-level tasks in display order (at most 2000 tasks in all, nested at most 9 levels deep).",
+      "items": { "$ref": "#/$defs/task" }
+    },
+    "versions": {
+      "type": "array",
+      "maxItems": 100,
+      "description": "Saved versions: named copies of the project settings and tasks that can be restored.",
+      "items": { "$ref": "#/$defs/version" }
+    }
+  },
+  "$defs": {
+    "id": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9_-]{1,32}$",
+      "description": "Letters, digits, \"_\" and \"-\", 1 to 32 characters."
+    },
+    "name": { "type": "string", "minLength": 1, "maxLength": 200 },
+    "date": {
+      "type": "string",
+      "format": "date",
+      "pattern": "^\\d{4}-\\d{2}-\\d{2}$",
+      "description": "YYYY-MM-DD, from 1970 to 2200."
+    },
+    "color": {
+      "enum": ["none", "green", "orange", "red", "purple", "teal", "gray"],
+      "default": "none",
+      "description": "Color label of the bar. A parent's color is the default for the tasks under it."
+    },
+    "resources": {
+      "type": "array",
+      "maxItems": 20,
+      "uniqueItems": true,
+      "description": "People or teams assigned.",
+      "items": { "type": "string", "minLength": 1, "maxLength": 50 }
+    },
+    "note": { "type": "string", "maxLength": 2000, "description": "Free-text memo." },
+    "project": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "name": { "type": "string", "maxLength": 200 },
+        "holidays": {
+          "type": "array",
+          "maxItems": 500,
+          "uniqueItems": true,
+          "description": "Days off besides Saturdays and Sundays.",
+          "items": { "$ref": "#/$defs/date" }
+        }
+      }
+    },
+    "dependency": {
+      "type": "object",
+      "required": ["task"],
+      "additionalProperties": false,
+      "description": "The task starts after the next working day after the predecessor's end, plus lag working days.",
+      "properties": {
+        "task": { "$ref": "#/$defs/id" },
+        "lag": { "type": "integer", "minimum": 0, "maximum": 999, "default": 0, "description": "Working days to wait (0 or more: a task cannot start before its predecessors end)." }
+      }
+    },
+    "task": {
+      "description": "A parent task (it has \"children\") or a leaf task.",
+      "type": "object",
+      "if": { "required": ["children"] },
+      "then": { "$ref": "#/$defs/parentTask" },
+      "else": { "$ref": "#/$defs/leafTask" }
+    },
+    "leafTask": {
+      "type": "object",
+      "required": ["id", "name", "start", "duration"],
+      "additionalProperties": false,
+      "properties": {
+        "id": { "$ref": "#/$defs/id" },
+        "name": { "$ref": "#/$defs/name" },
+        "start": { "$ref": "#/$defs/date", "description": "Start day. A task with predecessors starts after them whatever this says, so keep it as the day it starts." },
+        "duration": { "type": "integer", "minimum": 1, "maximum": 3650, "description": "Working days." },
+        "progress": { "type": "integer", "minimum": 0, "maximum": 100, "default": 0, "description": "Percent complete." },
+        "milestone": { "type": "boolean", "default": false, "description": "A point in time shown as a diamond; its duration is 1." },
+        "effort": { "type": "number", "minimum": 0, "maximum": 1000000, "description": "Effort in hours." },
+        "resources": { "$ref": "#/$defs/resources" },
+        "color": { "$ref": "#/$defs/color" },
+        "predecessors": { "type": "array", "maxItems": 50, "items": { "$ref": "#/$defs/dependency" } },
+        "note": { "$ref": "#/$defs/note" }
+      },
+      "if": { "required": ["milestone"], "properties": { "milestone": { "const": true } } },
+      "then": { "properties": { "duration": { "const": 1 } } }
+    },
+    "parentTask": {
+      "type": "object",
+      "required": ["id", "name", "children"],
+      "additionalProperties": false,
+      "properties": {
+        "id": { "$ref": "#/$defs/id" },
+        "name": { "$ref": "#/$defs/name" },
+        "collapsed": { "type": "boolean", "default": false, "description": "Hide the children in the list." },
+        "resources": { "$ref": "#/$defs/resources" },
+        "color": { "$ref": "#/$defs/color" },
+        "note": { "$ref": "#/$defs/note" },
+        "children": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/task" } }
+      }
+    },
+    "version": {
+      "type": "object",
+      "required": ["id", "name", "createdAt", "project", "tasks"],
+      "additionalProperties": false,
+      "properties": {
+        "id": { "$ref": "#/$defs/id" },
+        "name": { "type": "string", "maxLength": 200 },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "project": { "$ref": "#/$defs/project" },
+        "tasks": { "type": "array", "maxItems": 2000, "items": { "$ref": "#/$defs/task" } }
+      }
+    }
+  }
+}
