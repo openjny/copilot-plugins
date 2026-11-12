@@ -24,6 +24,7 @@ const ICONS = {
   sidebar: 'M4 5h16v14H4zM9 5v14',
   sliders: 'M4 6h10M18 6h2M16 4v4M4 12h2M10 12h10M8 10v4M4 18h9M17 18h3M15 16v4',
   history: 'M4 12a8 8 0 1 0 3-6.2M4 4v4h4M12 8v4l3 2',
+  today: 'M12 8a4 4 0 1 0 0 8 4 4 0 0 0 0-8zM12 2v3M12 19v3M2 12h3M19 12h3',
   download: 'M12 4v11M7 10l5 5 5-5M5 20h14',
   sun: 'M12 8a4 4 0 1 0 0 8 4 4 0 0 0 0-8zM12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4',
   moon: 'M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z',
@@ -48,6 +49,7 @@ const app = {
   autoScrolling: false,
   selected: null,
   picked: new Set(),
+  selLink: null,
   link: null,
   marquee: null,
   zoom: 'day',
@@ -139,6 +141,15 @@ const taskById = (id) => tasks().find((task) => task.id === id);
 const rowById = (id) => app.sched?.byId.get(id);
 const selectedRow = () => (app.selected ? rowById(app.selected) : undefined);
 
+/** The color a task is drawn in: its own, or else that of the nearest parent that has one. */
+function colorOf(row) {
+  for (let r = row; r; r = r.parent >= 0 ? app.sched.rows[r.parent] : null) {
+    const color = taskById(r.id).color;
+    if (color !== 'none') return color;
+  }
+  return 'none';
+}
+
 async function post(path, body) {
   let response;
   try {
@@ -210,6 +221,7 @@ function applyState(state) {
   app.picked = new Set([...app.picked].filter((id) => taskById(id)));
   if (app.selected && !taskById(app.selected)) app.selected = [...app.picked][0] ?? null;
   if (app.selected) app.picked.add(app.selected);
+  if (app.selLink && !hasLink(app.selLink.from, app.selLink.to)) app.selLink = null;
   if (app.drag) {
     app.pendingRender = true;
     return;
@@ -316,6 +328,7 @@ function renderTop() {
     h('div', { class: 'ttl' }, h('span', { class: 'title', title: doc.project.name || file.name }, doc.project.name || file.name), h('span', { class: 'file', title: file.path }, file.name)),
     h('span', { class: 'spacer' }),
     h('span', { id: 'save', class: 'save', 'aria-live': 'polite' }),
+    h('button', { id: 'today', class: 'btn tbtn', type: 'button', title: '今日の位置に戻る（横スクロール）', 'aria-label': '今日の位置に戻る', onclick: scrollToToday }, icon('today'), h('span', { class: 'label' }, '今日')),
     h(
       'div',
       { class: 'seg', role: 'group', 'aria-label': '表示の単位' },
@@ -439,7 +452,7 @@ function renderToolbar() {
     $(id).disabled = disabled;
   };
   set('tb-add', false);
-  set('tb-del', !row);
+  set('tb-del', !row && !app.selLink);
   set('tb-indent', !row || i === 0 || list[i - 1].level < list[i].level);
   set('tb-outdent', !row || list[i].level === 0);
   set('tb-up', !row || !siblingExists(list, i, 'up'));
@@ -465,6 +478,7 @@ async function onAdd() {
 }
 
 async function onDelete() {
+  if (app.selLink) return deleteLink();
   const row = app.picked.size > 1 ? undefined : selectedRow();
   if (!row) return;
   const task = taskById(row.id);
@@ -493,14 +507,22 @@ function computeRange(rows) {
   const ppd = PPD[app.zoom];
   const today = todayDay();
   const margin = marginDays(ppd);
-  const first = rows.length ? Math.min(...rows.map((row) => row.startDay)) : today;
-  const last = rows.length ? Math.max(...rows.map((row) => row.endDay)) : today;
+  // Today is always inside the range, so the chart can open on it and "today" has somewhere to go back to.
+  const first = Math.min(today, ...rows.map((row) => row.startDay));
+  const last = Math.max(today, ...rows.map((row) => row.endDay));
   const view = app.view ?? { start: Infinity, end: -Infinity };
   const start = Math.max(MIN_START, mondayOnOrBefore(Math.min(view.start, first - margin)));
   const end = Math.min(MAX_END, Math.max(view.end, last + margin, start + MIN_DAYS[app.zoom] - 1));
   const days = Math.ceil((end - start + 1) / 7) * 7;
   app.view = { start, end: start + days - 1 };
-  return { start, days, end: start + days - 1, ppd, width: days * ppd, today, first };
+  return { start, days, end: start + days - 1, ppd, width: days * ppd, today };
+}
+
+/** Scrolls sideways to today, a quarter of the way in from the left edge of the timeline. */
+function scrollToToday() {
+  const { start, ppd, today } = app.range;
+  const viewport = ui.scroller.clientWidth - listW();
+  ui.scroller.scrollLeft = Math.max(0, (today - start) * ppd - viewport / 4);
 }
 
 const monthStart = (y, m) => parseDate(`${y + Math.floor((m - 1) / 12)}-${String(((m - 1) % 12) + 1).padStart(2, '0')}-01`);
@@ -540,11 +562,11 @@ function renderChart() {
   renderLeftHeader();
   renderLeft();
   renderBody();
-  const { start, ppd, first } = app.range;
+  const { start, ppd } = app.range;
   // The range grew to the left: shift the scroll position so the days in view stay where they were.
   if (prev && prev.ppd === ppd && prev.start !== start) ui.scroller.scrollLeft += (prev.start - start) * ppd;
-  // A file just opened: show its first task rather than the empty margin before it.
-  if (fresh) ui.scroller.scrollLeft = Math.max(0, (first - start - 7) * ppd);
+  // A file just opened: show today.
+  if (fresh) scrollToToday();
 }
 
 let scrollFrame = 0;
@@ -748,7 +770,7 @@ function renderBody() {
     const label = `${task.name}: ${formatDate(row.startDay)} – ${formatDate(row.endDay)}（${formatDuration(row.duration)}）進捗 ${percent}%`;
     const selected = app.picked.has(row.id);
     if (row.summary) {
-      const sbar = h('div', { class: `sbar${selected ? ' sel' : ''}`, 'data-id': row.id, role: 'img', 'aria-label': label, title: label, style: { left: `${left}px`, width: `${width}px`, top: `${top + (named ? 14 : 8)}px` } });
+      const sbar = h('div', { class: `sbar c-${colorOf(row)}${selected ? ' sel' : ''}`, 'data-id': row.id, role: 'img', 'aria-label': label, title: label, style: { left: `${left}px`, width: `${width}px`, top: `${top + (named ? 14 : 8)}px` } });
       wireBar(sbar, row);
       parts.push(sbar);
       if (named) parts.push(h('div', { class: 'sum-label', style: { left: `${left}px`, top: `${top + 1}px` } }, `${task.name}  ${percent}%`));
@@ -759,7 +781,7 @@ function renderBody() {
     const inside = named ? width >= 80 : width >= 40 && app.zoom === 'day';
     const bar = h(
       'div',
-      { class: `bar c-${task.color}${selected ? ' sel' : ''}`, 'data-id': row.id, role: 'img', 'aria-label': label, title: label, style: { left: `${left}px`, width: `${width}px`, top: `${top + 5}px` } },
+      { class: `bar c-${colorOf(row)}${selected ? ' sel' : ''}`, 'data-id': row.id, role: 'img', 'aria-label': label, title: label, style: { left: `${left}px`, width: `${width}px`, top: `${top + 5}px` } },
       h('div', { class: 'fill', style: { width: `${percent}%` } }),
       inside ? h('span', { class: `pct${named ? ' named' : ''}` }, named ? `${task.name}  ${percent}%` : `${percent}%`) : null,
       h('div', { class: 'grip' }),
@@ -785,40 +807,148 @@ function linksLayer(rowTop) {
     defs.append(marker);
   }
   svg.append(defs);
-  for (const row of app.visible) {
-    for (const pred of taskById(row.id).predecessors) {
-      const from = rowById(pred.task);
-      if (!from || from.hidden) continue;
-      const x1 = (from.endDay - start + 1) * ppd;
-      const y1 = rowTop.get(from.id) + ROW_H / 2;
-      const x2 = (row.startDay - start) * ppd;
-      const y2 = rowTop.get(row.id) + ROW_H / 2;
-      // The arrow head is about 8px long and covers the end of the line, so the last leg must be longer than that
-      // or only the head is left.
-      let d;
-      if (x2 - x1 >= 6 + LINK_LEG) {
-        d = `M${x1},${y1} H${x1 + 6} V${y2} H${x2}`;
-      } else {
-        // Turn in the gap next to the target row, so the line never cuts through the bars between the two rows
-        // and the links into one task merge into a single line.
-        const ym = y2 > y1 ? y2 - ROW_H / 2 : y2 + ROW_H / 2;
-        d = `M${x1},${y1} H${x1 + 6} V${ym} H${x2 - LINK_LEG} V${y2} H${x2}`;
-      }
-      svg.append(svgEl('path', { class: 'link', d, 'marker-end': 'url(#arrow)', 'data-from': from.id, 'data-to': row.id }));
-    }
+  for (const link of layoutLinks(rowTop, start, ppd)) {
+    const path = svgEl('path', { class: 'link', d: link.d, 'marker-end': 'url(#arrow)', 'data-from': link.from.id, 'data-to': link.to.id });
+    // A wider invisible stroke on top makes the thin arrow easy to point at.
+    const hit = svgEl('path', { class: 'hit', d: link.d, 'data-from': link.from.id, 'data-to': link.to.id });
+    hit.addEventListener('pointerdown', (event) => {
+      if (event.button !== 0) return;
+      event.preventDefault();
+      event.stopPropagation();
+      selectLink(link.from.id, link.to.id);
+    });
+    hit.addEventListener('pointerenter', () => path.classList.add('hover'));
+    hit.addEventListener('pointerleave', () => path.classList.remove('hover'));
+    svg.append(path, hit);
   }
   return svg;
 }
 
-// Highlights the arrows into and out of the selected task and fades the rest.
+/**
+ * Routes every dependency arrow. A link leaves its predecessor to the right and enters its successor from the
+ * left. Links that share a task are spread (start and end heights, and the columns where they turn) so that
+ * they do not run on top of each other.
+ */
+function layoutLinks(rowTop, start, ppd) {
+  const links = [];
+  for (const row of app.visible) {
+    for (const pred of taskById(row.id).predecessors) {
+      const from = rowById(pred.task);
+      if (from && !from.hidden) links.push({ from, to: row });
+    }
+  }
+  const byTask = (key) => {
+    const groups = new Map();
+    for (const link of links) {
+      if (!groups.has(link[key].id)) groups.set(link[key].id, []);
+      groups.get(link[key].id).push(link);
+    }
+    return groups;
+  };
+  const gap = (n) => Math.min(3.5, 14 / Math.max(n - 1, 1));
+  const centered = (i, n) => (i - (n - 1) / 2) * gap(n);
+  const dy = (link) => rowTop.get(link.to.id) - rowTop.get(link.from.id);
+  // Heights. Leaving a task: links going up start above those going down. Entering a task: from above first
+  // (top to bottom), then from below. Each also gets its own height for the horizontal run in the gap next to the row.
+  for (const group of byTask('from').values()) {
+    const up = group.filter((link) => dy(link) < 0).sort((a, b) => dy(a) - dy(b));
+    const down = group.filter((link) => dy(link) > 0).sort((a, b) => dy(a) - dy(b));
+    [...up, ...down].forEach((link, i, all) => {
+      link.y1 = centered(i, all.length);
+    });
+  }
+  for (const group of byTask('to').values()) {
+    const above = group.filter((link) => dy(link) > 0).sort((a, b) => rowTop.get(a.from.id) - rowTop.get(b.from.id));
+    const below = group.filter((link) => dy(link) < 0).sort((a, b) => rowTop.get(a.from.id) - rowTop.get(b.from.id));
+    [...above, ...below].forEach((link, i, all) => {
+      link.y2 = centered(i, all.length);
+    });
+    for (const side of [above, below]) {
+      side.forEach((link, i) => {
+        link.turn = (i - (side.length - 1) / 2) * 2.5;
+      });
+    }
+  }
+  for (const link of links) {
+    link.x1 = (link.from.endDay - start + 1) * ppd;
+    link.x2 = (link.to.startDay - start) * ppd;
+    link.sy = rowTop.get(link.from.id) + ROW_H / 2 + link.y1;
+    link.ey = rowTop.get(link.to.id) + ROW_H / 2 + link.y2;
+    // The arrow head is about 8px long and covers the end of the line, so the last leg must be longer than that
+    // or only the head is left. When there is no room, turn in the gap next to the target row instead, so the
+    // line never cuts through the bars between the two rows.
+    link.direct = link.x2 - (link.x1 + 6) >= LINK_LEG;
+    link.ym = (link.ey > link.sy ? rowTop.get(link.to.id) : rowTop.get(link.to.id) + ROW_H) + link.turn;
+  }
+  // Columns. Each vertical stretch takes the first column where it does not lie on another one. The ones with the
+  // farthest to go are placed first, so they end up on the outside and the arrows do not cross.
+  const placed = [];
+  const free = (x, a, b) => !placed.some((v) => Math.abs(v.x - x) < 3 && Math.min(v.b, Math.max(a, b)) - Math.max(v.a, Math.min(a, b)) > 1);
+  const farthest = (a, b) => Math.abs(dy(b)) - Math.abs(dy(a));
+  for (const link of [...links].sort(farthest)) {
+    const top = link.direct ? link.ey : link.ym;
+    // A direct arrow must leave room for its last leg; one that turns in the gap may go as far right as it needs.
+    const room = link.direct ? link.x2 - link.x1 - LINK_LEG : 6 + 5 * 10;
+    let out = 6;
+    while (!free(link.x1 + out, link.sy, top) && out + 5 <= room) out += 5;
+    link.out = out;
+    placed.push({ x: link.x1 + out, a: Math.min(link.sy, top), b: Math.max(link.sy, top) });
+  }
+  for (const link of [...links].filter((item) => !item.direct).sort((a, b) => farthest(b, a))) {
+    let into = LINK_LEG;
+    while (!free(link.x2 - into, link.ym, link.ey) && into < LINK_LEG + 4 * 10) into += 4;
+    link.into = into;
+    placed.push({ x: link.x2 - into, a: Math.min(link.ym, link.ey), b: Math.max(link.ym, link.ey) });
+  }
+  for (const link of links) {
+    const out = link.x1 + link.out;
+    link.d = link.direct ? `M${link.x1},${link.sy} H${out} V${link.ey} H${link.x2}` : `M${link.x1},${link.sy} H${out} V${link.ym} H${link.x2 - link.into} V${link.ey} H${link.x2}`;
+  }
+  return links;
+}
+
+// ---- Selecting a dependency -----------------------------------------------------------------------------------------
+
+const hasLink = (from, to) => Boolean(taskById(to)?.predecessors.some((pred) => pred.task === from));
+
+/** Selects one dependency arrow; its details (the lag) open in the panel and it can be deleted there. */
+function selectLink(from, to) {
+  pick([], null);
+  app.selLink = { from, to };
+  app.detailOpen = true;
+  updateSelection();
+  renderToolbar();
+  renderPanel();
+  renderStatus();
+}
+
+function clearLink() {
+  if (!app.selLink) return;
+  app.selLink = null;
+  updateSelection();
+  renderToolbar();
+  renderPanel();
+  renderStatus();
+}
+
+async function deleteLink() {
+  const link = app.selLink;
+  if (!link || !hasLink(link.from, link.to)) return;
+  const task = taskById(link.to);
+  await send([{ op: 'update', id: link.to, predecessors: task.predecessors.filter((pred) => pred.task !== link.from) }]);
+}
+
+// Highlights the arrows into and out of the selected task, or the selected arrow, and fades the rest.
 function updateLinks() {
   const svg = ui.bt.querySelector('.links');
   if (!svg) return;
-  const related = [...svg.querySelectorAll('path.link')].filter((path) => app.picked.has(path.dataset.from) || app.picked.has(path.dataset.to));
+  const link = app.selLink;
+  const related = [...svg.querySelectorAll('path.link')].filter((path) => (link ? path.dataset.from === link.from && path.dataset.to === link.to : app.picked.has(path.dataset.from) || app.picked.has(path.dataset.to)));
   svg.classList.toggle('focus', related.length > 0);
   for (const path of svg.querySelectorAll('path.link')) {
     const on = related.includes(path);
     path.classList.toggle('rel', on);
+    path.classList.toggle('picked', on && Boolean(link));
     path.setAttribute('marker-end', on ? 'url(#arrow-hi)' : 'url(#arrow)');
   }
   // Later elements are drawn on top, so move the highlighted arrows to the end.
@@ -846,6 +976,7 @@ function updateSelection() {
 function pick(ids, primary = ids[0] ?? null, { notify = true } = {}) {
   app.picked = new Set(ids);
   app.selected = primary;
+  app.selLink = null;
   updateSelection();
   renderToolbar();
   renderPanel();
@@ -887,6 +1018,12 @@ function showDetail(id) {
 
 function closeDetail() {
   app.detailOpen = false;
+  if (app.selLink) {
+    app.selLink = null;
+    updateSelection();
+    renderToolbar();
+    renderStatus();
+  }
   renderPanel();
 }
 
@@ -912,7 +1049,8 @@ function renderStatus() {
     `進捗: ${project.count ? `${project.progress.toFixed(2)}%` : '-'}`,
   ];
   const row = selectedRow();
-  if (app.picked.size > 1) parts.push(`${app.picked.size} 件を選択中`);
+  if (app.selLink) parts.push('依存関係を選択中（Delete で削除）');
+  else if (app.picked.size > 1) parts.push(`${app.picked.size} 件を選択中`);
   else if (row) parts.push(`${taskById(row.id).name}  ${slash(row.startDay)} – ${slash(row.endDay)} (${formatDuration(row.duration)})`);
   ui.status.replaceChildren(...parts.map((text) => h('span', {}, text)));
 }
@@ -1299,7 +1437,8 @@ function renderPanel() {
   if (!app.sched || !app.state.file) return;
   const row = selectedRow();
   const several = app.picked.size > 1;
-  const open = app.detailOpen && (several || Boolean(row));
+  const link = app.selLink;
+  const open = app.detailOpen && (several || Boolean(row) || Boolean(link));
   if (open === ui.panel.hidden) {
     ui.panel.hidden = !open;
     afterPanelToggle();
@@ -1309,7 +1448,11 @@ function renderPanel() {
     return;
   }
   const brief = tasks().map((task) => [task.id, task.name]);
-  const key = several ? JSON.stringify(['several', [...app.picked], brief]) : JSON.stringify([taskById(row.id), row.startDay, row.endDay, row.duration, row.progress, row.summary, row.row, brief, app.state.file.path]);
+  const key = link
+    ? JSON.stringify(['link', link.from, link.to, taskById(link.to).predecessors, rowById(link.from)?.endDay, rowById(link.to)?.startDay, brief])
+    : several
+      ? JSON.stringify(['several', [...app.picked], brief])
+      : JSON.stringify([taskById(row.id), row.startDay, row.endDay, row.duration, row.progress, row.summary, row.row, colorOf(row), brief, app.state.file.path]);
   if (key === app.panelKey) return;
   app.panelKey = key;
 
@@ -1319,7 +1462,10 @@ function renderPanel() {
   const scrollTop = ui.panel.querySelector('.pbody')?.scrollTop ?? 0;
 
   const close = h('button', { class: 'btn flat square', type: 'button', 'aria-label': '詳細を閉じる', title: '閉じる（Esc）', onclick: closeDetail }, '×');
-  if (several) {
+  if (link) {
+    ui.panel.replaceChildren(h('div', { class: 'ph' }, h('span', { class: 'pt' }, `依存関係  #${rowById(link.from).row} ${taskById(link.from).name} → #${rowById(link.to).row} ${taskById(link.to).name}`), close), h('div', { class: 'pbody' }, linkForm(link)));
+    ui.panel.querySelector('.pbody').scrollTop = scrollTop;
+  } else if (several) {
     const names = [...app.picked].map((id) => taskById(id)?.name).filter(Boolean);
     ui.panel.replaceChildren(
       h('div', { class: 'ph' }, h('span', { class: 'pt' }, `${names.length} 件のタスクを選択中`), close),
@@ -1330,12 +1476,11 @@ function renderPanel() {
         h('ul', { class: 'picked' }, ...names.map((name) => h('li', {}, name))),
       ),
     );
-    return;
+  } else {
+    const task = taskById(row.id);
+    ui.panel.replaceChildren(h('div', { class: 'ph' }, h('span', { class: 'pt', title: task.name }, `#${row.row}  ${task.name}`), close), h('div', { class: 'pbody' }, taskForm(row)));
+    ui.panel.querySelector('.pbody').scrollTop = scrollTop;
   }
-
-  const task = taskById(row.id);
-  ui.panel.replaceChildren(h('div', { class: 'ph' }, h('span', { class: 'pt', title: task.name }, `#${row.row}  ${task.name}`), close), h('div', { class: 'pbody' }, taskForm(row)));
-  ui.panel.querySelector('.pbody').scrollTop = scrollTop;
 
   if (field) {
     const el = ui.panel.querySelector(`[data-field="${field}"]`);
@@ -1344,6 +1489,50 @@ function renderPanel() {
       if (caret && caret[0] !== null) el.setSelectionRange?.(caret[0], caret[1]);
     }
   }
+}
+
+function linkForm(link) {
+  const from = taskById(link.from);
+  const to = taskById(link.to);
+  const pred = to.predecessors.find((item) => item.task === link.from);
+  const rowFrom = rowById(link.from);
+  const rowTo = rowById(link.to);
+  const commit = (lag) => send([{ op: 'update', id: link.to, predecessors: to.predecessors.map((item) => (item.task === link.from ? { task: item.task, lag } : item)) }]);
+  const revert = (message) => {
+    toast(message, 'error');
+    app.panelKey = '';
+    renderPanel();
+  };
+  return h(
+    'div',
+    { class: 'form' },
+    labeled(
+      'ラグ（稼働日。0 以上）',
+      h('input', {
+        type: 'number',
+        min: '0',
+        max: '999',
+        step: '1',
+        value: String(pred.lag),
+        'data-field': 'link-lag',
+        onchange: (event) => {
+          const lag = Number(event.target.value);
+          if (event.target.value !== '' && Number.isInteger(lag) && lag >= 0 && lag <= 999) commit(lag);
+          else revert('ラグは 0〜999 の整数で入力してください。');
+        },
+      }),
+    ),
+    h('div', { class: 'lbl' }, '先行タスクの終了', h('span', { class: 'path' }, `${formatDate(rowFrom.endDay)}（${from.name}）`)),
+    h('div', { class: 'lbl' }, '後続タスクの開始', h('span', { class: 'path' }, `${formatDate(rowTo.startDay)}（${to.name}）`)),
+    h('p', { class: 'hint wide' }, '後続タスクは、先行タスクの終了の翌稼働日にラグを足した日以降に始まります。先行タスクが複数あるときは、いちばん遅いものに合わせます。'),
+    h(
+      'div',
+      { class: 'wide row-actions' },
+      h('button', { class: 'btn danger', type: 'button', onclick: deleteLink }, 'この依存関係を削除'),
+      h('button', { class: 'btn', type: 'button', onclick: () => showDetail(link.from) }, '先行タスクを開く'),
+      h('button', { class: 'btn', type: 'button', onclick: () => showDetail(link.to) }, '後続タスクを開く'),
+    ),
+  );
 }
 
 ui.panel.addEventListener('keydown', (event) => {
@@ -1452,6 +1641,11 @@ function taskForm(row) {
       { class: 'lbl wide' },
       '色ラベル',
       h('div', { class: 'swatches', role: 'group', 'aria-label': '色ラベル' }, ...COLORS.map((color) => h('button', { class: `swatch c-${color}`, type: 'button', 'aria-pressed': String(task.color === color), onclick: () => commit({ color }) }, h('i'), COLOR_NAME[color]))),
+      parent
+        ? h('span', {}, '色は配下のタスクの既定の色になります。選ぶと、配下のタスクに個別に付けた色は「なし」に戻ります。')
+        : task.color === 'none' && colorOf(row) !== 'none'
+          ? h('span', {}, `色が「なし」のため、親タスクの色（${COLOR_NAME[colorOf(row)]}）で表示しています。`)
+          : null,
     ),
     parent
       ? null
@@ -1586,9 +1780,16 @@ document.addEventListener('keydown', (event) => {
     if (app.link) {
       cancelLink();
       event.preventDefault();
+    } else if (app.selLink && !isTyping(event.target)) {
+      clearLink();
     } else if (app.picked.size > 1 && !isTyping(event.target)) {
       pick(app.selected ? [app.selected] : [], app.selected);
     }
+    return;
+  }
+  if ((event.key === 'Delete' || event.key === 'Backspace') && app.selLink && !isTyping(event.target)) {
+    event.preventDefault();
+    deleteLink();
     return;
   }
   // Ctrl+Up zooms in (day), Ctrl+Down zooms out (month).

@@ -173,6 +173,12 @@ button, input, select, textarea { font: inherit; color: inherit; }
 .sbar::before, .sbar::after { content: ""; position: absolute; top: 7px; border: 4px solid transparent; border-top: 5px solid var(--sum); }
 .sbar::before { left: 0; }
 .sbar::after { right: 0; }
+.sbar.c-green { --sum: var(--c-green-fill); }
+.sbar.c-orange { --sum: var(--c-orange-fill); }
+.sbar.c-red { --sum: var(--c-red-fill); }
+.sbar.c-purple { --sum: var(--c-purple-fill); }
+.sbar.c-teal { --sum: var(--c-teal-fill); }
+.sbar.c-gray { --sum: var(--c-gray-fill); }
 .sbar.sel { outline: 2px solid var(--accent); outline-offset: 1px; }
 /* Without the task list a parent task is named above its bar */
 .sum-label { position: absolute; height: 14px; line-height: 14px; padding-left: 2px; font-size: 11px; font-weight: 600; color: var(--fg); white-space: nowrap; pointer-events: none; z-index: 3; }
@@ -180,11 +186,14 @@ button, input, select, textarea { font: inherit; color: inherit; }
 .after-label { position: absolute; height: 18px; display: flex; align-items: center; margin-left: 10px; padding: 0 4px; border-radius: 3px; background: color-mix(in srgb, var(--bg) 88%, transparent); font-size: 11px; color: var(--muted); white-space: nowrap; pointer-events: none; z-index: 3; }
 .links { position: absolute; inset: 0; pointer-events: none; color: var(--muted); z-index: 2; }
 .links path.link { fill: none; stroke: currentColor; stroke-width: 1.2; }
+.links path.hit { fill: none; stroke: transparent; stroke-width: 12; pointer-events: stroke; cursor: pointer; }
+.links path.link.hover { stroke: var(--accent); stroke-width: 2.2; }
 .links .head { fill: var(--muted); }
 .links .head.hi { fill: var(--accent); }
 /* While a task is selected, its own arrows are drawn in the accent color and the others fade */
 .links.focus path.link { opacity: 0.3; }
 .links.focus path.link.rel { opacity: 1; stroke: var(--accent); stroke-width: 1.8; }
+.links path.link.picked { stroke-width: 3; }
 
 /* Detail panel: under the timeline, opened by clicking a task */
 .panel { flex: none; height: clamp(140px, 24vh, 240px); display: flex; flex-direction: column; border-top: 1px solid var(--line); background: var(--bg); }
@@ -205,6 +214,7 @@ button, input, select, textarea { font: inherit; color: inherit; }
 .hint { color: var(--muted); font-size: 12px; margin: 0; padding: 12px; line-height: 1.6; }
 .form .hint { padding: 0; }
 .err { margin: 0; color: var(--danger); font-size: 12px; }
+.row-actions { display: flex; flex-wrap: wrap; gap: 8px; }
 .swatches { display: flex; flex-wrap: wrap; gap: 6px; }
 .swatch { height: 26px; min-width: 26px; padding: 0 8px; border: 1px solid var(--line); border-radius: 13px; background: var(--bg); cursor: pointer; display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--fg); }
 .swatch[aria-pressed="true"] { border: 2px solid var(--accent); }

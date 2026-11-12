@@ -67,7 +67,7 @@ const taskFields = {
   progress: { type: 'number', minimum: 0, maximum: 100, description: 'Percent complete. Not for a parent task: it is computed from its children.' },
   effort: { type: ['number', 'null'], description: 'Effort in hours; null clears it.' },
   resources: { type: 'array', items: { type: 'string' }, description: 'People or teams assigned.' },
-  color: { type: 'string', enum: COLORS, description: 'Color label of the bar.' },
+  color: { type: 'string', enum: COLORS, description: 'Color label of the bar. The color of a parent is the default for the tasks under it (a task left at "none" takes it), and setting a parent\'s color clears the colors of the tasks under it.' },
   note: { type: 'string', description: 'Free-text memo.' },
   collapsed: { type: 'boolean', description: 'Collapse a parent task in the list.' },
   predecessors: {

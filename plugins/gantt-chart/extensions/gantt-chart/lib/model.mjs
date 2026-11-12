@@ -570,6 +570,10 @@ function patchTask(d, i, patch, cal) {
     fail('summary_field', `「${task.name}」は子タスクを持つため ${derived.join(', ')} を変更できません（子タスクから自動で決まります）。`);
   }
   for (const key of ['name', 'resources', 'color', 'note', 'collapsed', 'progress', 'effort']) if (patch[key] !== undefined) task[key] = patch[key];
+  // A parent's color is the default for the tasks under it, so setting it recolors the whole group.
+  if (patch.color !== undefined && isSummary(d.tasks, i)) {
+    for (let j = i + 1, end = subtreeEnd(d.tasks, i); j < end; j++) d.tasks[j].color = 'none';
+  }
   if (patch.predecessors !== undefined) {
     for (const pred of patch.predecessors) {
       if (pred.task === task.id) fail('invalid_input', '自分自身を先行タスクにはできません。');

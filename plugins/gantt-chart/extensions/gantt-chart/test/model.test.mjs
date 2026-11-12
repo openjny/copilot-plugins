@@ -129,6 +129,16 @@ test('slide rejects unknown tasks and bad days', () => {
   assert.throws(() => ops(sample(), [{ op: 'slide', ids: [], days: 1 }]), (error) => error.code === 'invalid_input');
 });
 
+test('setting the color of a parent clears the colors of the tasks under it', () => {
+  let doc = ops(sample(), [{ op: 'update', id: 'b', color: 'red' }, { op: 'update', id: 'e', color: 'teal' }]);
+  doc = ops(doc, [{ op: 'update', id: 'a', color: 'green' }]);
+  const by = Object.fromEntries(doc.tasks.map((task) => [task.id, task.color]));
+  assert.deepEqual([by.a, by.b, by.c, by.d], ['green', 'none', 'none', 'none']);
+  assert.equal(by.e, 'teal');
+  doc = ops(doc, [{ op: 'update', id: 'c', color: 'purple' }]);
+  assert.equal(doc.tasks.find((task) => task.id === 'c').color, 'purple');
+});
+
 test('an end date sets the duration in working days', () => {
   const doc = ops(sample(), [{ op: 'update', id: 'e', end: '2026-12-01' }]);
   assert.equal(doc.tasks.find((task) => task.id === 'e').duration, 5);
