@@ -66,6 +66,7 @@ const app = {
   ppd: PPD.day,
   listOpen: false,
   detailOpen: false,
+  moreOpen: false,
   editing: null,
   editText: '',
   drag: null,
@@ -78,7 +79,7 @@ const app = {
 };
 
 const $ = (id) => document.getElementById(id);
-const ui = Object.fromEntries(['start', 'editor', 'topbar', 'toolbar', 'banner', 'scroller', 'grid', 'hl', 'ht', 'bl', 'bt', 'panel', 'status', 'project', 'versions', 'confirm', 'toast', 'tip', 'today'].map((id) => [id, $(id)]));
+const ui = Object.fromEntries(['start', 'editor', 'topbar', 'toolbar', 'banner', 'scroller', 'grid', 'hl', 'ht', 'bl', 'bt', 'panel', 'status', 'project', 'versions', 'confirm', 'toast', 'tip', 'today', 'ctx'].map((id) => [id, $(id)]));
 // Width of the task list in the scroller: the row numbers are always there, the rest (name, duration, assignee) is off by default.
 const listW = () => (app.listOpen ? app.leftW : COLS.no.width);
 
@@ -512,7 +513,7 @@ function renderToolbar() {
     $(id).disabled = disabled;
   };
   set('tb-add', false);
-  set('tb-del', !row && !app.selLink);
+  set('tb-del', app.picked.size === 0 && !app.selLink);
   set('tb-indent', !row || i === 0 || list[i - 1].level < list[i].level);
   set('tb-outdent', !row || list[i].level === 0);
   set('tb-up', !row || !siblingExists(list, i, 'up'));
@@ -555,19 +556,95 @@ async function insertTask(where, id) {
   focusNewTask(results?.[0]?.id);
 }
 
+/** Deletes tasks together with their children; asks first when more than the one task that was pointed at goes. */
+async function deleteTasks(ids) {
+  const list = tasks();
+  const indexes = ids.map((id) => list.findIndex((task) => task.id === id)).filter((i) => i >= 0).sort((a, b) => a - b);
+  // A task inside another selected task goes with it.
+  const top = [];
+  let until = -1;
+  for (const i of indexes) {
+    if (i < until) continue;
+    top.push(i);
+    until = subtreeEnd(list, i);
+  }
+  if (!top.length) return;
+  const total = top.reduce((sum, i) => sum + subtreeEnd(list, i) - i, 0);
+  if (total > 1) {
+    const message = top.length === 1 ? `「${list[top[0]].name}」と、その子タスクをすべて削除します。` : `選択中の ${top.length} 件${total > top.length ? `（子タスクを含めて ${total} 件）` : ''}を削除します。`;
+    if (!(await confirmDialog(message, '削除'))) return;
+  }
+  await send(top.map((i) => ({ op: 'delete', id: list[i].id })));
+}
+
 async function onDelete() {
   if (app.selLink) return deleteLink();
-  const row = app.picked.size > 1 ? undefined : selectedRow();
-  if (!row) return;
-  const task = taskById(row.id);
-  if (row.summary && !(await confirmDialog(`「${task.name}」と、その子タスクをすべて削除します。`, '削除'))) return;
-  await send([{ op: 'delete', id: row.id }]);
+  await deleteTasks([...app.picked]);
 }
 
 async function operate(op, extra = {}) {
   const row = selectedRow();
   if (row) await send([{ op, id: row.id, ...extra }]);
 }
+
+// ---- Context menu (right click) -------------------------------------------------------------------------------------
+
+function hideMenu() {
+  ui.ctx.hidden = true;
+}
+
+/** Shows a small menu at the pointer. `items` are { label, run }; it closes on any click, Esc, scroll or when the window loses focus. */
+function showMenu(event, items) {
+  event.preventDefault();
+  ui.ctx.replaceChildren(
+    ...items.map(({ label, run }) =>
+      h('button', { class: 'ctx-item danger', type: 'button', role: 'menuitem', onclick: () => { hideMenu(); run(); } }, label),
+    ),
+  );
+  ui.ctx.hidden = false;
+  ui.ctx.style.left = `${Math.max(4, Math.min(event.clientX, window.innerWidth - ui.ctx.offsetWidth - 4))}px`;
+  ui.ctx.style.top = `${Math.max(4, Math.min(event.clientY, window.innerHeight - ui.ctx.offsetHeight - 4))}px`;
+  ui.ctx.querySelector('button')?.focus();
+}
+
+/** The menu for a task: the right-clicked task is selected first, unless it is already part of the selection. */
+function taskMenu(event, id) {
+  if (!app.picked.has(id)) select(id);
+  const ids = [...app.picked];
+  showMenu(event, [{ label: ids.length > 1 ? `選択中の ${ids.length} 件を削除` : 'タスクを削除', run: () => deleteTasks(ids) }]);
+}
+
+ui.bt.addEventListener('contextmenu', (event) => {
+  const el = event.target.closest('.bar, .sbar');
+  if (el) taskMenu(event, el.dataset.id);
+});
+ui.bl.addEventListener('contextmenu', (event) => {
+  // While a name is being typed the browser's own menu (copy, paste) is more useful.
+  if (isTyping(event.target)) return;
+  const el = event.target.closest('.lrow');
+  if (el) taskMenu(event, el.dataset.id);
+});
+document.addEventListener(
+  'pointerdown',
+  (event) => {
+    if (!ui.ctx.hidden && !ui.ctx.contains(event.target)) hideMenu();
+  },
+  true,
+);
+document.addEventListener(
+  'keydown',
+  (event) => {
+    if (ui.ctx.hidden) return;
+    if (event.key === 'Escape') {
+      event.preventDefault();
+      event.stopPropagation();
+    }
+    if (event.key === 'Escape' || event.key === 'Tab') hideMenu();
+  },
+  true,
+);
+window.addEventListener('blur', hideMenu);
+ui.scroller.addEventListener('scroll', hideMenu, { passive: true });
 
 // Timeline geometry
 
@@ -601,6 +678,30 @@ function scrollToToday() {
   const { start, ppd, today } = app.range;
   const viewport = ui.scroller.clientWidth - listW();
   ui.scroller.scrollLeft = Math.max(0, (today - start) * ppd - viewport / 4);
+}
+
+/**
+ * Scrolls sideways so that a task is in view with room around it. A task off to the left is brought in with its end
+ * date in view and room after it (what comes next); one off to the right with its start date in view and room before it.
+ * The whole task is shown when it fits. A task already in view, or one that spans the whole view, does not move the chart.
+ */
+function revealTask(id) {
+  const row = rowById(id);
+  const range = app.range;
+  if (!row || row.hidden || !range) return;
+  const sc = ui.scroller;
+  const view = sc.clientWidth - listW();
+  const a = (row.startDay - range.start) * range.ppd;
+  const b = (row.endDay + 1 - range.start) * range.ppd;
+  const width = b - a;
+  const edge = 8;
+  const room = clamp(view * 0.15, 48, 200);
+  const left = sc.scrollLeft;
+  const cutLeft = a < left + edge;
+  const cutRight = b > left + view - edge;
+  if (cutLeft === cutRight) return;
+  const next = cutLeft ? b - Math.min(view - room, Math.max(width + edge, room)) : a - Math.max(room, Math.min(view - edge - width, view - room));
+  sc.scrollLeft = clamp(next, 0, sc.scrollWidth - sc.clientWidth);
 }
 
 const monthStart = (y, m) => parseDate(`${y + Math.floor((m - 1) / 12)}-${String(((m - 1) % 12) + 1).padStart(2, '0')}-01`);
@@ -640,6 +741,7 @@ function renderChart() {
   app.range = computeRange(rows);
   ui.grid.style.setProperty('--row-h', `${ROW_H}px`);
   ui.grid.style.setProperty('--bar-h', `${BAR_H}px`);
+  ui.grid.style.setProperty('--k', String(linkScale()));
   ui.grid.style.setProperty('--bar-fs', `${clamp(Math.round(BAR_H * 0.6), 10, 14)}px`);
   const sum = summarySize();
   ui.grid.style.setProperty('--sbar-h', `${sum.bar}px`);
@@ -870,6 +972,18 @@ function renderBody() {
     parts.push(h('div', { class: 'today', title: `今日（${formatDate(today)}）`, style: { left: `${(today - start) * ppd + (app.zoom === 'day' ? ppd / 2 - 1 : 0)}px` } }));
   }
 
+  // The ground under a parent task: a light rectangle in its color, from its row to the row of its last child.
+  const pad = 6 * linkScale();
+  app.visible.forEach((row, i) => {
+    if (!row.summary) return;
+    let last = i;
+    while (last + 1 < app.visible.length && app.visible[last + 1].level > row.level) last++;
+    if (last === i) return;
+    const top = rowTop.get(row.id) + 1;
+    const height = rowTop.get(app.visible[last].id) + ROW_H - 1 - top;
+    parts.push(h('div', { class: `area c-${colorOf(row)}`, 'data-area': row.id, style: { left: `${(row.startDay - start) * ppd - pad}px`, width: `${(row.endDay - row.startDay + 1) * ppd + pad * 2}px`, top: `${top}px`, height: `${height}px` } }));
+  });
+
   for (const row of app.visible) {
     const task = taskById(row.id);
     const left = (row.startDay - start) * ppd;
@@ -910,13 +1024,19 @@ function renderBody() {
   updateSelection();
 }
 
+/** Scale of the links (line width, arrow head, gaps and legs): they follow the row height, so they zoom with the bars. */
+const linkScale = () => ROW_H / ROW_STD;
+
 function linksLayer(rowTop) {
   const { start, ppd, width } = app.range;
+  const k = linkScale();
   const svg = svgEl('svg', { class: 'links', width, height: Math.max(app.visible.length * ROW_H, 1), 'aria-hidden': 'true' });
+  svg.style.setProperty('--lw', `${(1.2 * k).toFixed(2)}px`);
   const defs = svgEl('defs');
   // The head is drawn in its own color so that the arrows of the selected task can be highlighted (see updateSelection).
-  for (const [id, cls] of [['arrow', 'head'], ['arrow-hi', 'head hi']]) {
-    const marker = svgEl('marker', { id, viewBox: '0 0 8 8', refX: 7, refY: 4, markerWidth: 7, markerHeight: 7, orient: 'auto' });
+  // Its size is in screen units, not in multiples of the line width, so a thicker (highlighted) line does not blow it up.
+  for (const [id, cls, size] of [['arrow', 'head', 8 * k], ['arrow-hi', 'head hi', 10 * k]]) {
+    const marker = svgEl('marker', { id, viewBox: '0 0 8 8', refX: 8, refY: 4, markerUnits: 'userSpaceOnUse', markerWidth: size.toFixed(2), markerHeight: size.toFixed(2), orient: 'auto' });
     marker.append(svgEl('path', { d: 'M0,0 L8,4 L0,8 z', class: cls }));
     defs.append(marker);
   }
@@ -933,6 +1053,10 @@ function linksLayer(rowTop) {
     });
     hit.addEventListener('pointerenter', () => path.classList.add('hover'));
     hit.addEventListener('pointerleave', () => path.classList.remove('hover'));
+    hit.addEventListener('contextmenu', (event) => {
+      selectLink(link.from.id, link.to.id);
+      showMenu(event, [{ label: '依存関係を削除', run: deleteLink }]);
+    });
     svg.append(path, hit);
   }
   return svg;
@@ -959,7 +1083,10 @@ function layoutLinks(rowTop, start, ppd) {
     }
     return groups;
   };
-  const gap = (n) => Math.min(3.5, 14 / Math.max(n - 1, 1));
+  // Every distance below is in multiples of k, so the routing keeps its shape when the chart is zoomed.
+  const k = linkScale();
+  const leg = LINK_LEG * k;
+  const gap = (n) => Math.min(3.5 * k, (14 * k) / Math.max(n - 1, 1));
   const centered = (i, n) => (i - (n - 1) / 2) * gap(n);
   const dy = (link) => rowTop.get(link.to.id) - rowTop.get(link.from.id);
   // Heights. Leaving a task: links going up start above those going down. Entering a task: from above first
@@ -979,7 +1106,7 @@ function layoutLinks(rowTop, start, ppd) {
     });
     for (const side of [above, below]) {
       side.forEach((link, i) => {
-        link.turn = (i - (side.length - 1) / 2) * 2.5;
+        link.turn = (i - (side.length - 1) / 2) * 2.5 * k;
       });
     }
   }
@@ -988,29 +1115,29 @@ function layoutLinks(rowTop, start, ppd) {
     link.x2 = (link.to.startDay - start) * ppd;
     link.sy = rowTop.get(link.from.id) + ROW_H / 2 + link.y1;
     link.ey = rowTop.get(link.to.id) + ROW_H / 2 + link.y2;
-    // The arrow head is about 8px long and covers the end of the line, so the last leg must be longer than that
-    // or only the head is left. When there is no room, turn in the gap next to the target row instead, so the
-    // line never cuts through the bars between the two rows.
-    link.direct = link.x2 - (link.x1 + 6) >= LINK_LEG;
+    // The arrow head covers the end of the line, so the last leg must be longer than it or only the head is left.
+    // When there is no room, turn in the gap next to the target row instead, so the line never cuts through the
+    // bars between the two rows.
+    link.direct = link.x2 - (link.x1 + 6 * k) >= leg;
     link.ym = (link.ey > link.sy ? rowTop.get(link.to.id) : rowTop.get(link.to.id) + ROW_H) + link.turn;
   }
   // Columns. Each vertical stretch takes the first column where it does not lie on another one. The ones with the
   // farthest to go are placed first, so they end up on the outside and the arrows do not cross.
   const placed = [];
-  const free = (x, a, b) => !placed.some((v) => Math.abs(v.x - x) < 3 && Math.min(v.b, Math.max(a, b)) - Math.max(v.a, Math.min(a, b)) > 1);
+  const free = (x, a, b) => !placed.some((v) => Math.abs(v.x - x) < 3 * k && Math.min(v.b, Math.max(a, b)) - Math.max(v.a, Math.min(a, b)) > 1);
   const farthest = (a, b) => Math.abs(dy(b)) - Math.abs(dy(a));
   for (const link of [...links].sort(farthest)) {
     const top = link.direct ? link.ey : link.ym;
     // A direct arrow must leave room for its last leg; one that turns in the gap may go as far right as it needs.
-    const room = link.direct ? link.x2 - link.x1 - LINK_LEG : 6 + 5 * 10;
-    let out = 6;
-    while (!free(link.x1 + out, link.sy, top) && out + 5 <= room) out += 5;
+    const room = link.direct ? link.x2 - link.x1 - leg : (6 + 5 * 10) * k;
+    let out = 6 * k;
+    while (!free(link.x1 + out, link.sy, top) && out + 5 * k <= room) out += 5 * k;
     link.out = out;
     placed.push({ x: link.x1 + out, a: Math.min(link.sy, top), b: Math.max(link.sy, top) });
   }
   for (const link of [...links].filter((item) => !item.direct).sort((a, b) => farthest(b, a))) {
-    let into = LINK_LEG;
-    while (!free(link.x2 - into, link.ym, link.ey) && into < LINK_LEG + 4 * 10) into += 4;
+    let into = leg;
+    while (!free(link.x2 - into, link.ym, link.ey) && into < leg + 4 * 10 * k) into += 4 * k;
     link.into = into;
     placed.push({ x: link.x2 - into, a: Math.min(link.ym, link.ey), b: Math.max(link.ym, link.ey) });
   }
@@ -1124,10 +1251,12 @@ function clickTask(event, id) {
 }
 
 // Clicking a task also opens its details; while the panel is open it follows the selection, including keyboard moves.
-function showDetail(id) {
+// The chart scrolls to the task when it is not in view (but not while a bar is being pressed, which may become a drag).
+function showDetail(id, { reveal = true } = {}) {
   select(id);
   app.detailOpen = true;
   renderPanel();
+  if (reveal) revealTask(id);
 }
 
 function closeDetail() {
@@ -1201,7 +1330,7 @@ function beginDrag(event, row, bar) {
     clickTask(event, row.id);
     if (!app.picked.has(row.id)) return;
   } else if (resize || app.picked.size <= 1 || !app.picked.has(row.id)) {
-    showDetail(row.id);
+    showDetail(row.id, { reveal: false });
   }
   // Pressing one of several selected bars keeps the group for a drag; a click without a drag then selects just that one.
   const collapse = !modifier && !resize && app.picked.size > 1;
@@ -1221,6 +1350,7 @@ function beginDrag(event, row, bar) {
     maxLeft: resize ? 0 : maxSlideEarlier(app.state.doc, group),
     days: 0,
     collapse,
+    modifier,
     moved: false,
     x0: event.clientX,
     scroll0: ui.scroller.scrollLeft,
@@ -1329,6 +1459,8 @@ async function endDrag(event) {
   }
   if (ops) await send(ops);
   else if (app.sched) renderChart();
+  // A click (no drag) on a bar brings the task into view.
+  if (!ops && event.type === 'pointerup' && drag.mode === 'move' && !drag.moved && !drag.modifier && !drag.collapse) revealTask(drag.row.id);
   if (app.pendingRender) {
     app.pendingRender = false;
     render();
@@ -1567,7 +1699,7 @@ function renderPanel() {
     ? JSON.stringify(['link', link.from, link.to, taskById(link.to).predecessors, rowById(link.from)?.endDay, rowById(link.to)?.startDay, brief])
     : several
       ? JSON.stringify(['several', [...app.picked], brief])
-      : JSON.stringify([taskById(row.id), row.startDay, row.endDay, row.duration, row.progress, row.summary, row.row, colorOf(row), brief, app.state.file.path]);
+      : JSON.stringify([taskById(row.id), row.startDay, row.endDay, row.duration, row.progress, row.summary, row.row, colorOf(row), brief, app.state.file.path, app.moreOpen]);
   if (key === app.panelKey) return;
   app.panelKey = key;
 
@@ -1593,7 +1725,9 @@ function renderPanel() {
     );
   } else {
     const task = taskById(row.id);
-    ui.panel.replaceChildren(h('div', { class: 'ph' }, h('span', { class: 'pt', title: task.name }, `#${row.row}  ${task.name}`), close), h('div', { class: 'pbody' }, taskForm(row)));
+    const { nameInput, quick, more } = taskForm(row);
+    const toggle = h('button', { class: 'btn more-btn', type: 'button', 'aria-expanded': String(app.moreOpen), title: '日程・担当・色・先行タスクを表示 / 非表示', onclick: toggleMore }, app.moreOpen ? '▾ 詳細設定' : '▸ 詳細設定');
+    ui.panel.replaceChildren(h('div', { class: 'ph' }, h('span', { class: 'pno', title: task.name }, `#${row.row}`), nameInput, toggle, close), h('div', { class: 'pbody' }, quick, app.moreOpen ? more : null));
     ui.panel.querySelector('.pbody').scrollTop = scrollTop;
   }
 
@@ -1604,6 +1738,15 @@ function renderPanel() {
       if (caret && caret[0] !== null) el.setSelectionRange?.(caret[0], caret[1]);
     }
   }
+  // The panel's height depends on what it shows, and so does the room left for the chart.
+  updateBodyMin();
+}
+
+/** Shows or hides the less used fields (dates, assignee, color, predecessors) under the progress, effort and note. */
+function toggleMore() {
+  app.moreOpen = !app.moreOpen;
+  app.panelKey = '';
+  renderPanel();
 }
 
 function linkForm(link) {
@@ -1706,20 +1849,19 @@ function taskForm(row) {
   const pick = h('select', { 'data-field': 'pred-pick', 'aria-label': '先行タスクを選択' }, h('option', { value: '' }, 'タスクを選択'), ...candidates.map((item) => h('option', { value: item.id }, `#${rowById(item.id).row} ${item.name}`)));
   const lag = h('input', { type: 'number', min: '0', max: '999', step: '1', value: '0', 'data-field': 'pred-lag', 'aria-label': '追加する先行タスクのラグ（稼働日）' });
 
-  return h(
+  const nameInput = h('input', {
+    class: 'pname',
+    type: 'text',
+    value: task.name,
+    maxlength: '200',
+    'data-field': 'name',
+    'aria-label': 'タスク名',
+    onchange: (event) => (event.target.value.trim() ? commit({ name: event.target.value }) : revert('タスク名は空にできません。')),
+  });
+  // What is entered day to day (progress, effort, note) is always at hand; the rest opens with the button in the header.
+  const quick = h(
     'div',
-    { class: 'form' },
-    labeled(
-      'タスク名',
-      h('input', {
-        type: 'text',
-        value: task.name,
-        maxlength: '200',
-        'data-field': 'name',
-        onchange: (event) => (event.target.value.trim() ? commit({ name: event.target.value }) : revert('タスク名は空にできません。')),
-      }),
-      'wide',
-    ),
+    { class: 'quick form' },
     h('div', { class: 'lbl' }, '進捗', h('div', { class: 'range' }, rangeInput, output)),
     labeled(
       '工数 (h)',
@@ -1733,6 +1875,12 @@ function taskForm(row) {
         onchange: (event) => (event.target.value === '' ? commit({ effort: null }) : Number(event.target.value) >= 0 ? commit({ effort: Number(event.target.value) }) : revert('工数は 0 以上の数値で入力してください。')),
       }),
     ),
+    labeled('メモ', h('textarea', { 'data-field': 'note', maxlength: '2000', onchange: (event) => commit({ note: event.target.value }) }, task.note), 'note'),
+    parent ? h('p', { class: 'hint note-hint' }, '子タスクを持つタスクの日付・進捗・工数は、子タスクから自動で決まります。') : null,
+  );
+  const more = h(
+    'div',
+    { class: 'form more' },
     h(
       'div',
       { class: 'pair wide' },
@@ -1749,7 +1897,6 @@ function taskForm(row) {
         onchange: (event) => (parseDuration(event.target.value) !== null ? commit({ duration: event.target.value }) : revert('期間は「3d」「2w」のように入力してください。')),
       }),
     ),
-    parent ? h('p', { class: 'hint wide' }, '子タスクを持つタスクの日付・進捗・工数は、子タスクから自動で決まります。') : null,
     labeled('担当（カンマ区切り）', h('input', { type: 'text', value: task.resources.join(', '), 'data-field': 'resources', onchange: (event) => commit({ resources: event.target.value }) })),
     h(
       'div',
@@ -1762,11 +1909,9 @@ function taskForm(row) {
           ? h('span', {}, `色が「なし」のため、親タスクの色（${COLOR_NAME[colorOf(row)]}）で表示しています。`)
           : null,
     ),
-    parent
-      ? null
-      : h('div', { class: 'lbl wide' }, '先行タスク（終了の翌稼働日 + ラグ）', ...predecessors, h('div', { class: 'pred-add' }, pick, lag, h('button', { class: 'btn', type: 'button', onclick: () => pick.value && commit({ predecessors: [...task.predecessors, { task: pick.value, lag: Math.trunc(Number(lag.value)) || 0 }] }) }, '追加'))),
-    labeled('メモ', h('textarea', { 'data-field': 'note', maxlength: '2000', onchange: (event) => commit({ note: event.target.value }) }, task.note), 'wide'),
+    parent ? null : h('div', { class: 'lbl wide' }, '先行タスク（終了の翌稼働日 + ラグ）', ...predecessors, h('div', { class: 'pred-add' }, pick, lag, h('button', { class: 'btn', type: 'button', onclick: () => pick.value && commit({ predecessors: [...task.predecessors, { task: pick.value, lag: Math.trunc(Number(lag.value)) || 0 }] }) }, '追加'))),
   );
+  return { nameInput, quick, more };
 }
 
 // ---- Project settings -----------------------------------------------------------------------------------------
@@ -1871,6 +2016,7 @@ ui.bl.addEventListener('keydown', (event) => {
     const row = app.visible[Math.max(0, Math.min(i, app.visible.length - 1))];
     select(row.id);
     ui.bl.querySelector(`[data-id="${row.id}"]`)?.scrollIntoView({ block: 'nearest' });
+    revealTask(row.id);
   };
   const row = app.visible[index];
   switch (event.key) {

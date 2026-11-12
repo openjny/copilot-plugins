@@ -179,6 +179,14 @@ button, input, select, textarea { font: inherit; color: inherit; }
 .bar.c-purple { --bar: var(--c-purple-bar); --fill: var(--c-purple-fill); }
 .bar.c-teal { --bar: var(--c-teal-bar); --fill: var(--c-teal-fill); }
 .bar.c-gray { --bar: var(--c-gray-bar); --fill: var(--c-gray-fill); }
+/* The ground under a parent task: its color, light, from its row to its last child */
+.area { position: absolute; border-radius: 4px; background: color-mix(in srgb, var(--area, var(--sum)) 12%, transparent); pointer-events: none; }
+.area.c-green { --area: var(--c-green-fill); }
+.area.c-orange { --area: var(--c-orange-fill); }
+.area.c-red { --area: var(--c-red-fill); }
+.area.c-purple { --area: var(--c-purple-fill); }
+.area.c-teal { --area: var(--c-teal-fill); }
+.area.c-gray { --area: var(--c-gray-fill); }
 .sbar { position: absolute; height: var(--sbar-h, 7px); background: var(--sum); border-radius: 1px; z-index: 2; cursor: pointer; }
 .sbar::before, .sbar::after { content: ""; position: absolute; top: var(--sbar-h, 7px); border: calc(var(--sbar-h, 7px) * 0.57) solid transparent; border-top: calc(var(--sbar-h, 7px) * 0.71) solid var(--sum); }
 .sbar::before { left: 0; }
@@ -193,26 +201,36 @@ button, input, select, textarea { font: inherit; color: inherit; }
 /* Without the task list a parent task is named above its bar */
 .sum-label { position: absolute; height: var(--sum-lh, 14px); line-height: var(--sum-lh, 14px); padding: 0 4px; border-radius: 3px; background: color-mix(in srgb, var(--bg) 82%, transparent); font-size: var(--bar-fs, 11px); font-weight: 600; color: var(--fg); white-space: nowrap; pointer-events: none; z-index: 3; }
 /* The label sits right of the bar, clear of the link that leaves the bar end, and above the links so they do not run through the text */
-.after-label { position: absolute; height: var(--bar-h, 18px); display: flex; align-items: center; margin-left: 10px; padding: 0 4px; border-radius: 3px; background: color-mix(in srgb, var(--bg) 88%, transparent); font-size: var(--bar-fs, 11px); color: var(--muted); white-space: nowrap; pointer-events: none; z-index: 3; }
-.links { position: absolute; inset: 0; pointer-events: none; color: var(--muted); z-index: 2; }
-.links path.link { fill: none; stroke: currentColor; stroke-width: 1.2; }
-.links path.hit { fill: none; stroke: transparent; stroke-width: 12; pointer-events: stroke; cursor: pointer; }
-.links path.link.hover { stroke: var(--fg); stroke-width: 2.2; }
+.after-label { position: absolute; height: var(--bar-h, 18px); display: flex; align-items: center; margin-left: calc(10px * var(--k, 1)); padding: 0 4px; border-radius: 3px; background: color-mix(in srgb, var(--bg) 88%, transparent); font-size: var(--bar-fs, 11px); color: var(--muted); white-space: nowrap; pointer-events: none; z-index: 3; }
+.links { position: absolute; inset: 0; pointer-events: none; color: var(--muted); z-index: 2; --lw: 1.2px; }
+.links path.link { fill: none; stroke: currentColor; stroke-width: var(--lw); }
+.links path.hit { fill: none; stroke: transparent; stroke-width: calc(var(--lw) * 10); pointer-events: stroke; cursor: pointer; }
+.links path.link.hover { stroke: var(--fg); stroke-width: calc(var(--lw) * 1.8); }
 .links .head { fill: var(--muted); }
 .links .head.hi { fill: var(--fg); }
-/* While a task is selected, its own arrows are drawn in the accent color and the others fade */
+/* While a task is selected, its own arrows are drawn in the dark gray and the others fade */
 .links.focus path.link { opacity: 0.3; }
-.links.focus path.link.rel { opacity: 1; stroke: var(--fg); stroke-width: 1.8; }
-.links path.link.picked { stroke-width: 3; }
+.links.focus path.link.rel { opacity: 1; stroke: var(--fg); stroke-width: calc(var(--lw) * 1.5); }
+.links path.link.picked { stroke-width: calc(var(--lw) * 2.2); }
 
-/* Detail panel: under the timeline, opened by clicking a task */
-.panel { flex: none; height: clamp(140px, 24vh, 240px); display: flex; flex-direction: column; border-top: 1px solid var(--line); background: var(--bg); }
+/* Detail panel: under the timeline, opened by clicking a task. It is as small as its content (progress, effort and note
+   for a task; the other fields open with the button in its header) and scrolls inside when there is more. */
+.panel { flex: none; max-height: clamp(110px, 26vh, 240px); display: flex; flex-direction: column; border-top: 1px solid var(--line); background: var(--bg); }
 .ph { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 3px 6px 3px 12px; border-bottom: 1px solid var(--line); background: var(--head); }
 .pt { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pno { flex: none; color: var(--muted); font-variant-numeric: tabular-nums; }
+.pname { flex: 1; min-width: 0; height: 26px; padding: 0 6px; border: 1px solid transparent; border-radius: 6px; background: transparent; color: var(--fg); font-weight: 600; text-overflow: ellipsis; }
+.pname:hover { border-color: var(--line); }
+.pname:focus { border-color: var(--accent); background: var(--bg); outline: none; }
+.more-btn { flex: none; height: 26px; padding: 0 8px; font-size: 12px; white-space: nowrap; }
 .pbody { flex: 1; min-height: 0; overflow: auto; }
 .form { padding: 12px; display: flex; flex-direction: column; gap: 12px; }
 .panel .form { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); grid-auto-flow: dense; gap: 12px 16px; align-items: start; }
 .panel .form .wide { grid-column: span 2; }
+.panel .form.quick { grid-template-columns: minmax(170px, 1fr) 110px minmax(220px, 2.4fr); gap: 6px 16px; padding: 8px 12px 10px; }
+.quick .note-hint { grid-column: 1 / -1; }
+.quick textarea { height: 52px; }
+.panel .form.more { border-top: 1px solid var(--line); }
 .form label, .form .lbl { display: flex; flex-direction: column; gap: 4px; font-size: 12px; color: var(--muted); }
 .form input[type="text"], .form input[type="number"], .form input[type="date"], .form select, .form textarea { width: 100%; height: 30px; border: 1px solid var(--line); border-radius: 6px; background: var(--bg); padding: 0 8px; color: var(--fg); }
 .form textarea { height: 84px; padding: 6px 8px; resize: vertical; }
@@ -263,6 +281,13 @@ button, input, select, textarea { font: inherit; color: inherit; }
 .toast.error { background: #a82a2a; }
 .tip { position: fixed; z-index: 40; padding: 3px 8px; border-radius: 6px; background: #2b3137; color: #fff; font-size: 12px; pointer-events: none; white-space: nowrap; }
 
+/* Right-click menu */
+.ctx { position: fixed; z-index: 50; min-width: 160px; padding: 4px; border: 1px solid var(--line); border-radius: 8px; background: var(--bg); box-shadow: var(--shadow); }
+.ctx[hidden] { display: none; }
+.ctx-item { display: block; width: 100%; height: 28px; padding: 0 10px; border: 0; border-radius: 5px; background: transparent; text-align: left; cursor: pointer; font-size: 13px; }
+.ctx-item:hover, .ctx-item:focus-visible { background: var(--head); outline: none; }
+.ctx-item.danger { color: var(--danger); }
+
 /* Start screen */
 .start { height: 100%; display: flex; align-items: center; justify-content: center; padding: 24px; overflow: auto; }
 .card { width: min(560px, 100%); display: flex; flex-direction: column; gap: 16px; }
@@ -286,4 +311,5 @@ button, input, select, textarea { font: inherit; color: inherit; }
 }
 @media (max-width: 599px) {
   .panel .form .wide { grid-column: auto; }
+  .panel .form.quick { grid-template-columns: 1fr; }
 }
