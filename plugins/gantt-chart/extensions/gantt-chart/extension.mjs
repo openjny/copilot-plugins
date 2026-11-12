@@ -98,8 +98,9 @@ const opSchema = {
     after: { ...idProperty, description: 'add / move: place right after this task and its children, at the same level.' },
     before: { ...idProperty, description: 'add / move: place right before this task, at the same level.' },
     direction: { type: 'string', enum: ['up', 'down'], description: 'shift: swap with the previous or next task of the same level.' },
-    holidays: { type: 'array', items: { type: 'string' }, description: 'project: the holidays (YYYY-MM-DD); replaces the list. Saturdays and Sundays are off unless they are in workdays.' },
-    workdays: { type: 'array', items: { type: 'string' }, description: 'project: Saturdays and Sundays (YYYY-MM-DD) that are worked; replaces the list.' },
+    weeklyOff: { type: 'array', items: { type: 'string', enum: ['mon', 'tue', 'wed', 'thu', 'fri', 'sat', 'sun'] }, description: 'project: the weekdays that are off every week (default ["sat","sun"]); replaces the list. At least one weekday must stay a working day.' },
+    holidays: { type: 'array', items: { type: 'string' }, description: 'project: the days off besides the weekly days off (YYYY-MM-DD); replaces the list.' },
+    extraWorkdays: { type: 'array', items: { type: 'string' }, description: 'project: days (YYYY-MM-DD) that are worked although they would be off (a weekly day off); replaces the list.' },
     weekStart: { type: 'string', enum: ['mon', 'sun'], description: 'project: the day weeks start on in the timeline (default "mon").' },
     ...taskFields,
   },
@@ -144,7 +145,7 @@ const ganttChart = createCanvas({
     },
     {
       name: 'edit_chart',
-      description: 'Apply one or more edits to the chart, all or nothing, and save the file. The page updates at once, and the user can undo the edit there. Returns one result per op (the id of an added task), the resulting chart, and when the edit pushed other tasks later because of their dependencies, \"shifted\" (those tasks, with the working days they moved) and when a task became a parent and lost its predecessors, \"dropped\". Parent tasks (tasks with children) take their dates and progress from their children. Durations count working days (Saturdays, Sundays and project holidays are off).',
+      description: 'Apply one or more edits to the chart, all or nothing, and save the file. The page updates at once, and the user can undo the edit there. Returns one result per op (the id of an added task), the resulting chart, and when the edit pushed other tasks later because of their dependencies, \"shifted\" (those tasks, with the working days they moved) and when a task became a parent and lost its predecessors, \"dropped\". Parent tasks (tasks with children) take their dates and progress from their children. Durations count working days (the weekly days off, Saturday and Sunday by default, and project holidays are off).',
       inputSchema: {
         type: 'object',
         properties: {
@@ -152,7 +153,7 @@ const ganttChart = createCanvas({
             type: 'array',
             minItems: 1,
             maxItems: 200,
-            description: 'Edits, applied in order. add {name, parent|after|before, start, end|duration, progress, milestone, estimate, actual, due, resources, color, predecessors, id}; update {id, ...fields}; delete {id, reconnect} (with its children; reconnect joins the tasks before and after it); tighten {ids} starts tasks on the first day their predecessors allow, closing gaps (the result has \"count\"); duplicate {id} (copies a task with its children right after it; the result has "copy", the id of the new task); move {id, parent|after|before}; indent/outdent {id}; shift {id, direction}; slide {ids, days} moves tasks together by working days; project {name, holidays, workdays, weekStart}; save_version {name} saves a version; restore_version {id}; delete_version {id}.',
+            description: 'Edits, applied in order. add {name, parent|after|before, start, end|duration, progress, milestone, estimate, actual, due, resources, color, predecessors, id}; update {id, ...fields}; delete {id, reconnect} (with its children; reconnect joins the tasks before and after it); tighten {ids} starts tasks on the first day their predecessors allow, closing gaps (the result has \"count\"); duplicate {id} (copies a task with its children right after it; the result has "copy", the id of the new task); move {id, parent|after|before}; indent/outdent {id}; shift {id, direction}; slide {ids, days} moves tasks together by working days; project {name, weeklyOff, holidays, extraWorkdays, weekStart}; save_version {name} saves a version; restore_version {id}; delete_version {id}.',
             items: opSchema,
           },
         },

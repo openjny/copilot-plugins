@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://raw.githubusercontent.com/openjny/copilot-plugins/main/plugins/gantt-chart/extensions/gantt-chart/schema/gantt-chart.schema.json",
   "title": "Gantt chart (openjny-gantt-chart, version 3)",
-  "description": "A Gantt chart: a tree of tasks with dates, dependencies and progress, plus saved versions. A parent task has \"children\" and takes its dates, progress and hours (estimate and actual) from them; a leaf task has \"start\" and \"duration\". Durations count working days (Saturdays, Sundays and the project's holidays are off, unless the project works that weekend day). Besides this schema, the program checks that ids are unique, that every predecessor exists, that no task is its own predecessor, and that the dependencies have no cycle. Version 2 files (which call the estimate \"effort\") are read as version 3.",
+  "description": "A Gantt chart: a tree of tasks with dates, dependencies and progress, plus saved versions. A parent task has \"children\" and takes its dates, progress and hours (estimate and actual) from them; a leaf task has \"start\" and \"duration\". Durations count working days (the weekly days off, Saturday and Sunday by default, and the project's holidays are off, unless the project works that day). Besides this schema, the program checks that ids are unique, that every predecessor exists, that no task is its own predecessor, and that the dependencies have no cycle. Version 2 files (which call the estimate \"effort\") are read as version 3.",
   "type": "object",
   "required": ["format", "version", "project", "tasks"],
   "additionalProperties": false,
@@ -54,18 +54,25 @@
       "additionalProperties": false,
       "properties": {
         "name": { "type": "string", "maxLength": 200 },
+        "weeklyOff": {
+          "type": "array",
+          "maxItems": 6,
+          "uniqueItems": true,
+          "description": "The weekdays that are off every week. Leave it out for the default, Saturday and Sunday. At least one weekday must be a working day.",
+          "items": { "enum": ["mon", "tue", "wed", "thu", "fri", "sat", "sun"] }
+        },
         "holidays": {
           "type": "array",
           "maxItems": 500,
           "uniqueItems": true,
-          "description": "Days off besides Saturdays and Sundays.",
+          "description": "Days off besides the weekly days off.",
           "items": { "$ref": "#/$defs/date" }
         },
-        "workdays": {
+        "extraWorkdays": {
           "type": "array",
           "maxItems": 500,
           "uniqueItems": true,
-          "description": "Saturdays and Sundays that are worked. Leave it out when there are none.",
+          "description": "Days that are worked although they would be off (a weekly day off). A day that is in both this list and holidays counts as worked. Leave it out when there are none.",
           "items": { "$ref": "#/$defs/date" }
         },
         "weekStart": {

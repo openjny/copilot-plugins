@@ -57,7 +57,12 @@ export function parseDate(text) {
 /** 0 = Sunday. */
 export const dayOfWeek = (day) => (((day + 4) % 7) + 7) % 7;
 export const mondayOnOrBefore = (day) => day - ((dayOfWeek(day) + 6) % 7);
-export const isWeekend = (day) => dayOfWeek(day) === 0 || dayOfWeek(day) === 6;
+/** The weekdays by `dayOfWeek`; a project's weekly days off use these keys. */
+export const WEEKDAYS = ['sun', 'mon', 'tue', 'wed', 'thu', 'fri', 'sat'];
+const WEEK_ORDER = ['mon', 'tue', 'wed', 'thu', 'fri', 'sat', 'sun'];
+export const DEFAULT_WEEKLY_OFF = ['sat', 'sun'];
+/** The weekday keys without duplicates, Monday first. */
+export const sortWeekdays = (keys) => WEEK_ORDER.filter((key) => keys.includes(key));
 /** The first day of the week that holds `day`, for a week that starts on Monday ("mon") or Sunday ("sun"). */
 export const weekStartOnOrBefore = (day, weekStart = 'mon') => day - ((dayOfWeek(day) - (weekStart === 'sun' ? 0 : 1) + 7) % 7);
 
@@ -70,13 +75,17 @@ export function ymd(day) {
   return { y: date.getUTCFullYear(), m: date.getUTCMonth() + 1, d: date.getUTCDate() };
 }
 
-// ---- Working-day calendar: Saturday, Sunday and the project's holidays are off, except the weekend days it works ----
+// ---- Working-day calendar: the weekdays the project is off every week (Saturday and Sunday by default), plus its holidays, except the days it works anyway ----
 
 export function makeCalendar(project) {
   const holidays = new Set((project?.holidays ?? []).map(parseDate).filter((day) => day !== null));
-  const workdays = new Set((project?.workdays ?? []).map(parseDate).filter((day) => day !== null));
+  const extraWorkdays = new Set((project?.extraWorkdays ?? []).map(parseDate).filter((day) => day !== null));
+  const weeklyOff = new Set((project?.weeklyOff ?? DEFAULT_WEEKLY_OFF).map((key) => WEEKDAYS.indexOf(key)));
+  /** Whether the day is a working day before holidays and extra workdays are taken into account. */
+  const isRegular = (day) => !weeklyOff.has(dayOfWeek(day));
   const isHoliday = (day) => holidays.has(day);
-  const isWorkday = (day) => (isWeekend(day) ? workdays.has(day) : !holidays.has(day));
+  // A day in both lists counts as worked.
+  const isWorkday = (day) => extraWorkdays.has(day) || (!holidays.has(day) && isRegular(day));
   const step = (day, direction) => {
     let current = day;
     for (let i = 0; i < 20000; i++) {
@@ -100,7 +109,7 @@ export function makeCalendar(project) {
   };
   /** Signed number of working days from a to b; both must be working days. */
   const diff = (a, b) => (a <= b ? count(a, b) - 1 : -(count(b, a) - 1));
-  return { isWorkday, isHoliday, next, prev, add, count, diff };
+  return { isWorkday, isRegular, isHoliday, next, prev, add, count, diff };
 }
 
 export const formatDuration = (days) => (days >= 5 && days % 5 === 0 ? `${days / 5}w` : `${days}d`);
@@ -207,9 +216,15 @@ const FIELD = {
     if (!Array.isArray(value) || value.length > 500 || value.some((item) => parseDate(item) === null)) bad(what, 'expect.holidays');
     return [...new Set(value)].sort();
   },
-  workdays(value, what) {
-    if (!Array.isArray(value) || value.length > 500 || value.some((item) => parseDate(item) === null || !isWeekend(parseDate(item)))) bad(what, 'expect.workdays');
+  extraWorkdays(value, what) {
+    if (!Array.isArray(value) || value.length > 500 || value.some((item) => parseDate(item) === null)) bad(what, 'expect.extraWorkdays');
     return [...new Set(value)].sort();
+  },
+  weeklyOff(value, what) {
+    if (!Array.isArray(value) || value.some((item) => !WEEKDAYS.includes(item))) bad(what, 'expect.weeklyOff');
+    const keys = sortWeekdays(value);
+    if (keys.length === WEEKDAYS.length) bad(what, 'expect.weeklyOff');
+    return keys;
   },
   weekStart(value, what) {
     if (!WEEK_STARTS.includes(value)) bad(what, 'expect.weekStart');
@@ -236,7 +251,7 @@ export const blankTask = (id) => ({
 });
 
 export function emptyDoc(name = '') {
-  return { format: FORMAT, version: VERSION, project: { name: name.slice(0, 200), holidays: [], workdays: [], weekStart: 'mon' }, tasks: [], versions: [] };
+  return { format: FORMAT, version: VERSION, project: { name: name.slice(0, 200), holidays: [], extraWorkdays: [], weeklyOff: [...DEFAULT_WEEKLY_OFF], weekStart: 'mon' }, tasks: [], versions: [] };
 }
 
 /** Checks the outline (the first task is at level 0, a level rises by at most 1) and the predecessors of a flat task list. */
@@ -724,13 +739,14 @@ function runOp(d, op, ctx) {
       return { op: 'shift', id: op.id };
     }
     case 'project': {
-      allowKeys(op, ['op', 'name', 'holidays', 'workdays', 'weekStart']);
+      allowKeys(op, ['op', 'name', 'weeklyOff', 'holidays', 'extraWorkdays', 'weekStart']);
       if (op.name !== undefined) {
         if (typeof op.name !== 'string' || op.name.length > 200) bad('name', 'expect.name200');
         d.project.name = op.name.trim();
       }
+      if (op.weeklyOff !== undefined) d.project.weeklyOff = FIELD.weeklyOff(op.weeklyOff, 'weeklyOff');
       if (op.holidays !== undefined) d.project.holidays = FIELD.holidays(op.holidays, 'holidays');
-      if (op.workdays !== undefined) d.project.workdays = FIELD.workdays(op.workdays, 'workdays');
+      if (op.extraWorkdays !== undefined) d.project.extraWorkdays = FIELD.extraWorkdays(op.extraWorkdays, 'extraWorkdays');
       if (op.weekStart !== undefined) d.project.weekStart = FIELD.weekStart(op.weekStart, 'weekStart');
       return { op: 'project' };
     }
@@ -830,8 +846,9 @@ export function describe(doc, { includeVersions = false } = {}) {
   const out = {
     project: {
       name: doc.project.name,
+      weeklyOff: doc.project.weeklyOff,
       holidays: doc.project.holidays,
-      workdays: doc.project.workdays,
+      extraWorkdays: doc.project.extraWorkdays,
       weekStart: doc.project.weekStart,
       start: project.startDay === null ? null : formatDate(project.startDay),
       end: project.endDay === null ? null : formatDate(project.endDay),

@@ -1,11 +1,11 @@
 import { LOCALES, getLocale, resolveLocale, setLocale, t } from '/i18n.mjs';
-import { FIRST_DAY, PALETTE, WEEK_STARTS, applyOps, formatDate, formatDuration, isSummary, isWeekend, makeCalendar, maxSlideEarlier, parseDate, parseDuration, schedule, subtreeEnd, todayDay, weekStartOnOrBefore, ymd } from '/model.mjs';
+import { FIRST_DAY, PALETTE, WEEKDAYS, WEEK_STARTS, applyOps, formatDate, formatDuration, isSummary, makeCalendar, maxSlideEarlier, parseDate, parseDuration, schedule, subtreeEnd, todayDay, weekStartOnOrBefore, ymd } from '/model.mjs';
 
 // Row height and pixels per day change with Ctrl+scroll, so they are variables; the ROW_STD / PPD values are the
 // "standard" scale that the day / week / month buttons reset to.
 const ROW_STD = 28;
 const ROW_MIN = 22;
-const ROW_MAX = 48;
+const ROW_MAX = 40;
 let ROW_H = ROW_STD;
 let BAR_H = ROW_STD - 10;
 const LINK_LEG = 14;
@@ -97,6 +97,9 @@ const app = {
   tagDraft: '',
   titleRedraw: false,
   colDrag: null,
+  // The header cell under the pointer (or whose menu is open), marked across the chart too.
+  bandCell: null,
+  menuCell: null,
   lastClick: null,
   pendingRender: false,
   saving: 'saved',
@@ -144,6 +147,8 @@ function dateFormat(options) {
   return formatters.get(key);
 }
 const dayDate = (day) => new Date(day * 86400000);
+/** A Sunday: `SUNDAY + i` is the weekday with the number i (0 = Sunday), for the names of the weekdays. */
+const SUNDAY = parseDate('2024-01-07');
 /** The day weeks start on in the timeline: the project's choice (Monday unless it says Sunday). */
 const weekStartDay = () => app.state?.doc?.project?.weekStart ?? 'mon';
 
@@ -1035,6 +1040,11 @@ async function addChild(id) {
 
 function hideMenu() {
   ui.ctx.hidden = true;
+  if (app.menuCell) {
+    app.menuCell.classList.remove('target');
+    app.menuCell = null;
+    markCell(null);
+  }
 }
 
 /**
@@ -1178,31 +1188,59 @@ ui.bl.addEventListener('contextmenu', (event) => {
 // Right-clicking a day in the timeline header switches it between a working day and a day off.
 ui.ht.addEventListener('contextmenu', (event) => {
   const cell = event.target.closest('.hc[data-day]');
-  if (cell) dayMenu(event, Number(cell.dataset.day));
+  if (cell) dayMenu(event, Number(cell.dataset.day), cell);
 });
 
-/** The menu of a day in the timeline header. */
-function dayMenu(event, day) {
+/** The menu of a day in the timeline header. The cell stays marked while the menu is open, so it is clear which day it is about. */
+function dayMenu(event, day, cell) {
   const date = formatDate(day);
   showMenu(event, [{ label: t(app.cal.isWorkday(day) ? 'ctx.dayOff' : 'ctx.dayWork', { date }), icon: 'calendar', run: () => toggleWorkday(day) }]);
+  app.menuCell = cell;
+  cell.classList.add('target');
+  markCell(cell);
 }
 
+// ---- The date header: hovering marks the days a cell stands for, clicking zooms to them --------------------------
+
+/** The marked span across the chart body (see renderBody, which puts it back after a redraw). */
+const hband = h('div', { class: 'hband', hidden: true });
+
+/** Marks a header cell, and the days it stands for across the chart; null clears the mark. */
+function markCell(cell) {
+  if (app.bandCell === cell) return;
+  app.bandCell = cell;
+  hband.hidden = !cell || !app.range;
+  if (hband.hidden) return;
+  const from = Number(cell.dataset.from);
+  hband.style.left = `${(from - app.range.start) * app.range.ppd}px`;
+  hband.style.width = `${(Number(cell.dataset.to) - from + 1) * app.range.ppd}px`;
+}
+
+ui.ht.addEventListener('pointermove', (event) => {
+  if (!app.menuCell) markCell(event.target.closest?.('.hc[data-from]') ?? null);
+});
+ui.ht.addEventListener('pointerleave', () => {
+  if (!app.menuCell) markCell(null);
+});
+// A cell that covers more than a day (a year, a month, a week) zooms the chart to fill the width with it.
+ui.ht.addEventListener('click', (event) => {
+  const cell = event.target.closest?.('.hc.fit');
+  if (cell) fitDays(Number(cell.dataset.from), Number(cell.dataset.to));
+});
+
 /**
- * Switches a day between working and off. Saturdays and Sundays are off unless the project lists them as worked;
- * the other days are working unless the project lists them as holidays.
+ * Switches a day between working and off. A day is as the week says (see the weekly days off) unless the project lists
+ * it: in the holidays when it would be worked, in the extra workdays when it would be off.
  */
 function toggleWorkday(day) {
-  const { holidays, workdays } = app.state.doc.project;
+  const { holidays, extraWorkdays } = app.state.doc.project;
   const date = formatDate(day);
-  const working = app.cal.isWorkday(day);
   const nextHolidays = holidays.filter((item) => item !== date);
-  const nextWorkdays = workdays.filter((item) => item !== date);
-  if (isWeekend(day)) {
-    if (!working) nextWorkdays.push(date);
-  } else if (working) {
-    nextHolidays.push(date);
-  }
-  return send([{ op: 'project', holidays: nextHolidays.sort(), workdays: nextWorkdays.sort() }]);
+  const nextExtra = extraWorkdays.filter((item) => item !== date);
+  const toWork = !app.cal.isWorkday(day);
+  if (toWork && !app.cal.isRegular(day)) nextExtra.push(date);
+  else if (!toWork && app.cal.isRegular(day)) nextHolidays.push(date);
+  return send([{ op: 'project', holidays: nextHolidays.sort(), extraWorkdays: nextExtra.sort() }]);
 }
 document.addEventListener(
   'pointerdown',
@@ -1267,6 +1305,15 @@ function scrollToToday() {
   ui.scroller.scrollLeft = Math.max(0, (today - start) * ppd - viewport / 4);
 }
 
+/** Zooms so that the days from..to fill the width of the view (as far as the scale allows), keeping the row height, and scrolls them to the middle. */
+function fitDays(from, to) {
+  const view = ui.scroller.clientWidth - listW();
+  const days = to - from + 1;
+  setScale(view / days, ROW_H);
+  const { start, ppd } = app.range;
+  ui.scroller.scrollLeft = Math.max(0, (from - start) * ppd - (view - days * ppd) / 2);
+}
+
 /** Zooms so that the whole project fits the width of the view, and scrolls to its start. */
 function fitAll() {
   const project = app.sched?.project;
@@ -1311,6 +1358,8 @@ function revealTask(id) {
 }
 
 const monthStart = (y, m) => parseDate(`${y + Math.floor((m - 1) / 12)}-${String(((m - 1) % 12) + 1).padStart(2, '0')}-01`);
+/** The whole month that a segment of the range belongs to (the range may cut a month off at its ends). */
+const monthSpan = (seg) => [monthStart(seg.y, seg.m), monthStart(seg.y, seg.m + 1) - 1];
 
 function monthSegments(start, end) {
   const segments = [];
@@ -1410,10 +1459,12 @@ function renderTimelineHeader() {
   const { start, end, ppd, today } = app.range;
   const top = h('div', { class: 'hrow' });
   const bottom = h('div', { class: 'hrow' });
-  // The cell that holds today is tinted, so the date in view that is today stands out.
-  const cell = (parent, from, to, text, cls = '', title = '') => {
+  // The cell that holds today is tinted, so the date in view that is today stands out. `span` is the days the cell stands
+  // for (a whole month or year even where the range cuts it off): what a click on it zooms to.
+  const cell = (parent, from, to, text, cls = '', title = '', span = [from, to]) => {
     const here = parent === bottom && from <= today && today <= to;
-    parent.append(h('div', { class: `hc ${cls}${here ? ' is-today' : ''}`.trim(), style: { left: `${(from - start) * ppd}px`, width: `${(to - from + 1) * ppd}px` }, title: here ? `${t('chart.today', { date: formatDate(today) })}` : title }, text));
+    const fits = span[1] > span[0];
+    parent.append(h('div', { class: `hc ${cls}${fits ? ' fit' : ''}${here ? ' is-today' : ''}`.trim().replace(/\s+/g, ' '), 'data-from': String(span[0]), 'data-to': String(span[1]), style: { left: `${(from - start) * ppd}px`, width: `${(to - from + 1) * ppd}px` }, title: here ? `${t('chart.today', { date: formatDate(today) })}` : title }, text));
   };
   const fmt = (day, options) => dateFormat(options).format(dayDate(day));
   const monthLong = { year: 'numeric', month: 'long' };
@@ -1432,17 +1483,17 @@ function renderTimelineHeader() {
       bottom.lastElementChild.dataset.day = String(day);
     }
   } else if (app.zoom === 'week') {
-    for (const seg of monthSegments(start, end)) cell(top, seg.from, seg.to, fmt(seg.from, monthLong), 'grp');
+    for (const seg of monthSegments(start, end)) cell(top, seg.from, seg.to, fmt(seg.from, monthLong), 'grp', '', monthSpan(seg));
     for (let first = start; first <= end; first += 7) cell(bottom, first, first + 6, fmt(first, { month: 'numeric', day: 'numeric' }), '', formatDate(first));
   } else {
     const months = monthSegments(start, end);
     for (let i = 0; i < months.length; ) {
       let j = i;
       while (j + 1 < months.length && months[j + 1].y === months[i].y) j++;
-      cell(top, months[i].from, months[j].to, fmt(months[i].from, { year: 'numeric' }), 'grp');
+      cell(top, months[i].from, months[j].to, fmt(months[i].from, { year: 'numeric' }), 'grp', '', [monthStart(months[i].y, 1), monthStart(months[i].y + 1, 1) - 1]);
       i = j + 1;
     }
-    for (const seg of months) cell(bottom, seg.from, seg.to, fmt(seg.from, { month: 'short' }), '', fmt(seg.from, monthLong));
+    for (const seg of months) cell(bottom, seg.from, seg.to, fmt(seg.from, { month: 'short' }), '', fmt(seg.from, monthLong), monthSpan(seg));
   }
   ui.ht.replaceChildren(top, bottom);
 }
@@ -1552,6 +1603,10 @@ function renderBody() {
   const rowTop = new Map(app.visible.map((row, i) => [row.id, i * ROW_H]));
   app.rowTop = rowTop;
 
+  // The header cells are drawn again, so a mark on one of them is dropped (the pointer sets it again when it moves).
+  app.bandCell = null;
+  hband.hidden = true;
+  parts.push(hband);
   parts.push(h('div', { class: 'rowsel', hidden: true }));
   if (app.zoom !== 'month') {
     for (let day = start; day < start + days; day++) {
@@ -1565,7 +1620,7 @@ function renderBody() {
     for (let day = start + step; day < start + days; day += step) parts.push(h('div', { class: 'vl', style: { left: `${(day - start) * ppd}px` } }));
   }
   if (today >= start && today < start + days) {
-    parts.push(h('div', { class: 'today', title: t('chart.today', { date: formatDate(today) }), style: { left: `${(today - start) * ppd + (app.zoom === 'day' ? ppd / 2 - 1 : 0)}px` } }));
+    parts.push(h('div', { class: 'today', style: { left: `${(today - start) * ppd + (app.zoom === 'day' ? ppd / 2 - 1 : 0)}px` } }));
   }
 
   // The ground under a parent task: a light rectangle in its color, from its row to the row of its last child.
@@ -2169,6 +2224,7 @@ ui.scroller.addEventListener('pointermove', (event) => {
     if (Math.hypot(event.clientX - pan.x0, event.clientY - pan.y0) < PAN_SLOP) return;
     pan.moved = true;
     hideMenu();
+    markCell(null);
     ui.scroller.setPointerCapture(event.pointerId);
     ui.scroller.classList.add('panning');
   }
@@ -2217,31 +2273,42 @@ ui.bt.addEventListener('pointermove', (event) => {
   hoverToday(event);
 });
 
-/** The line of today is too thin to carry a title, so the hint is shown while the pointer rests on it. */
+/**
+ * The line of today is too thin to carry a title. While the pointer rests on it, a red dot marks the spot on the line
+ * and a red box above the dot names the day.
+ */
+const todayPin = h('div', { class: 'today-pin', hidden: true }, h('span'));
+document.body.append(todayPin);
+
 function hoverToday(event) {
   const line = ui.bt.querySelector('.today');
   const x = line ? line.getBoundingClientRect().left + 1 : null;
   const near = x !== null && !app.drag && !app.link && !app.marquee && !event.target.closest?.('.bar, .sbar, .conn-h, .hit') && Math.abs(event.clientX - x) <= 4;
   if (near) {
     app.todayTip = true;
-    ui.tip.hidden = false;
-    ui.tip.textContent = t('chart.today', { date: formatDate(app.range.today) });
-    ui.tip.style.left = `${event.clientX + 14}px`;
-    ui.tip.style.top = `${event.clientY + 16}px`;
+    const label = todayPin.firstElementChild;
+    label.textContent = t('chart.today', { date: formatDate(app.range.today) });
+    todayPin.hidden = false;
+    todayPin.style.left = `${x}px`;
+    todayPin.style.top = `${event.clientY}px`;
+    // The box is centered on the dot, kept inside the window.
+    const width = label.offsetWidth;
+    label.style.left = `${clamp(x - width / 2, 4, window.innerWidth - width - 4) - x}px`;
   } else if (app.todayTip) {
-    app.todayTip = false;
-    ui.tip.hidden = true;
+    hideTodayPin();
   }
+}
+
+function hideTodayPin() {
+  app.todayTip = false;
+  todayPin.hidden = true;
 }
 
 ui.bt.addEventListener('pointerup', endMarquee);
 ui.bt.addEventListener('pointercancel', endMarquee);
 ui.bt.addEventListener('pointerleave', () => {
   if (!app.link) ui.bt.querySelector('.conn')?.classList.remove('show');
-  if (app.todayTip) {
-    app.todayTip = false;
-    ui.tip.hidden = true;
-  }
+  if (app.todayTip) hideTodayPin();
 });
 
 function moveMarquee(marquee, event) {
@@ -2979,14 +3046,28 @@ function openProject() {
   const weekStart = h('select', { 'aria-label': t('project.weekStart'), 'data-field': 'weekStart' }, ...WEEK_STARTS.map((value) => h('option', { value }, t(value === 'sun' ? 'project.weekSun' : 'project.weekMon'))));
   weekStart.value = project.weekStart;
   const holidays = h('textarea', { spellcheck: 'false', placeholder: '2026-11-23', 'aria-label': t('project.holidaysAria') }, project.holidays.join('\n'));
-  const workdays = h('textarea', { spellcheck: 'false', placeholder: '2026-11-21', 'aria-label': t('project.workdaysAria') }, project.workdays.join('\n'));
+  const extraWorkdays = h('textarea', { spellcheck: 'false', placeholder: '2026-11-21', 'aria-label': t('project.extraWorkdaysAria') }, project.extraWorkdays.join('\n'));
+  // One toggle per weekday, in the order the weeks start in; a pressed one is off every week.
+  const weekdays = h('div', { class: 'swatches', role: 'group', 'aria-label': t('project.weeklyOffAria') });
+  const drawWeekdays = (saved) => {
+    const order = saved.weekStart === 'sun' ? [0, 1, 2, 3, 4, 5, 6] : [1, 2, 3, 4, 5, 6, 0];
+    weekdays.replaceChildren(
+      ...order.map((index) => {
+        const key = WEEKDAYS[index];
+        const off = saved.weeklyOff.includes(key);
+        const next = off ? saved.weeklyOff.filter((item) => item !== key) : [...saved.weeklyOff, key];
+        return h('button', { class: 'swatch', type: 'button', 'data-weekday': key, 'aria-pressed': String(off), onclick: () => save({ weeklyOff: next }) }, dateFormat({ weekday: 'short' }).format(dayDate(SUNDAY + index)));
+      }),
+    );
+  };
   // Shows what was saved (the server trims and sorts), or what is still saved when the edit was refused.
   const show = () => {
     const saved = app.state.doc.project;
     name.value = saved.name;
     weekStart.value = saved.weekStart;
     holidays.value = saved.holidays.join('\n');
-    workdays.value = saved.workdays.join('\n');
+    extraWorkdays.value = saved.extraWorkdays.join('\n');
+    drawWeekdays(saved);
   };
   const save = async (op) => {
     error.hidden = true;
@@ -3000,7 +3081,8 @@ function openProject() {
   name.addEventListener('change', () => save({ name: name.value }));
   weekStart.addEventListener('change', () => save({ weekStart: weekStart.value }));
   holidays.addEventListener('change', () => save({ holidays: dates(holidays) }));
-  workdays.addEventListener('change', () => save({ workdays: dates(workdays) }));
+  extraWorkdays.addEventListener('change', () => save({ extraWorkdays: dates(extraWorkdays) }));
+  drawWeekdays(project);
   ui.project.replaceChildren(
     h('div', { class: 'dh' }, h('span', { id: 'project-title' }, t('project.title')), h('button', { class: 'btn flat square', type: 'button', 'aria-label': t('dlg.close'), onclick: () => ui.project.close() }, '×')),
     h(
@@ -3011,8 +3093,9 @@ function openProject() {
         { class: 'form', style: { padding: '0' } },
         labeled(t('project.name'), name),
         labeled(t('project.weekStart'), weekStart),
+        h('div', { class: 'lbl' }, t('project.weeklyOff'), weekdays),
         labeled(t('project.holidays'), holidays),
-        labeled(t('project.workdays'), workdays),
+        labeled(t('project.extraWorkdays'), extraWorkdays),
         error,
         h('p', { class: 'hint' }, t('project.hint')),
         h('div', { class: 'lbl' }, t('project.file'), h('span', { class: 'path' }, app.state.file.path)),

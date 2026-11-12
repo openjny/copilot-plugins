@@ -298,18 +298,32 @@ test('holidays change the working days', () => {
   assert.deepEqual([by.c.start, by.c.end], ['2026-11-19', '2026-11-20']);
 });
 
-test('a worked weekend day counts as a working day, and a holiday on it does not matter', () => {
-  const cal = makeCalendar({ holidays: ['2026-11-21'], workdays: ['2026-11-21', '2026-11-22'] });
+test('an extra workday counts as a working day, and wins over a holiday on the same day', () => {
+  const cal = makeCalendar({ holidays: ['2026-11-21'], extraWorkdays: ['2026-11-21', '2026-11-22'] });
   assert.deepEqual(['2026-11-20', '2026-11-21', '2026-11-22', '2026-11-23'].map((text) => cal.isWorkday(day(text))), [true, true, true, true]);
   assert.equal(cal.count(day('2026-11-20'), day('2026-11-23')), 4);
-  const doc = ops(sample(), [{ op: 'project', workdays: ['2026-11-21'] }, { op: 'update', id: 'b', duration: 5 }]);
+  const doc = ops(sample(), [{ op: 'project', extraWorkdays: ['2026-11-21'] }, { op: 'update', id: 'b', duration: 5 }]);
   assert.equal(doc.tasks.find((task) => task.id === 'b').start, '2026-11-16');
   const by = Object.fromEntries(describe(doc).tasks.map((task) => [task.id, task]));
   assert.equal(by.b.end, '2026-11-20');
-  const saturday = ops(sample(), [{ op: 'project', workdays: ['2026-11-21'] }, { op: 'update', id: 'b', duration: 6 }]);
+  const saturday = ops(sample(), [{ op: 'project', extraWorkdays: ['2026-11-21'] }, { op: 'update', id: 'b', duration: 6 }]);
   assert.equal(describe(saturday).tasks.find((task) => task.id === 'b').end, '2026-11-21');
-  assert.throws(() => ops(sample(), [{ op: 'project', workdays: ['2026-11-18'] }]), (error) => error.key === 'err.expect' && /Saturdays or Sundays/.test(error.message));
-  assert.deepEqual(describe(doc).project.workdays, ['2026-11-21']);
+  assert.throws(() => ops(sample(), [{ op: 'project', extraWorkdays: ['soon'] }]), (error) => error.key === 'err.expect');
+  assert.deepEqual(describe(doc).project.extraWorkdays, ['2026-11-21']);
+});
+
+test('the weekdays that are off every week are the project\'s choice', () => {
+  const cal = makeCalendar({ weeklyOff: ['sun', 'mon'] });
+  assert.deepEqual(['2026-11-14', '2026-11-15', '2026-11-16', '2026-11-17'].map((text) => cal.isWorkday(day(text))), [true, false, false, true]);
+  assert.deepEqual([cal.isRegular(day('2026-11-14')), cal.isRegular(day('2026-11-16'))], [true, false]);
+  assert.equal(makeCalendar({}).isWorkday(day('2026-11-14')), false, 'Saturday and Sunday are off by default');
+  assert.deepEqual(emptyDoc().project.weeklyOff, ['sat', 'sun']);
+  // Monday is off, so the task that started on it starts on Tuesday; the week is stored Monday first.
+  const doc = ops(sample(), [{ op: 'project', weeklyOff: ['sun', 'mon'] }]);
+  assert.deepEqual(describe(doc).project.weeklyOff, ['mon', 'sun']);
+  assert.equal(doc.tasks.find((task) => task.id === 'b').start, '2026-11-17');
+  assert.throws(() => ops(sample(), [{ op: 'project', weeklyOff: ['mon', 'tue', 'wed', 'thu', 'fri', 'sat', 'sun'] }]), (error) => error.key === 'err.expect', 'a week needs a working day');
+  assert.throws(() => ops(sample(), [{ op: 'project', weeklyOff: ['funday'] }]), (error) => error.key === 'err.expect');
 });
 
 test('weeks start on Monday unless the project says Sunday', () => {
@@ -323,15 +337,16 @@ test('weeks start on Monday unless the project says Sunday', () => {
   assert.throws(() => ops(sample(), [{ op: 'project', weekStart: 'tue' }]), (error) => error.code === 'invalid_input');
 });
 
-test('the file leaves out what is at its default, and keeps worked weekends and the week start', () => {
+test('the file leaves out what is at its default, and keeps the weekly days off, extra workdays and the week start', () => {
   const plain = JSON.parse(serializeDoc(sample()));
   assert.deepEqual(Object.keys(plain.project), ['name', 'holidays']);
-  const set = ops(sample(), [{ op: 'project', workdays: ['2026-11-21'], weekStart: 'sun' }]);
+  const set = ops(sample(), [{ op: 'project', extraWorkdays: ['2026-11-21'], weeklyOff: ['sun', 'sat', 'wed'], weekStart: 'sun' }]);
   const raw = JSON.parse(serializeDoc(set));
-  assert.deepEqual([raw.project.workdays, raw.project.weekStart], [['2026-11-21'], 'sun']);
+  assert.deepEqual([raw.project.weeklyOff, raw.project.extraWorkdays, raw.project.weekStart], [['wed', 'sat', 'sun'], ['2026-11-21'], 'sun']);
   const again = readDoc(raw);
-  assert.deepEqual([again.project.workdays, again.project.weekStart], [['2026-11-21'], 'sun']);
+  assert.deepEqual([again.project.weeklyOff, again.project.extraWorkdays, again.project.weekStart], [['wed', 'sat', 'sun'], ['2026-11-21'], 'sun']);
   assert.equal(readDoc(plain).project.weekStart, 'mon');
+  assert.deepEqual(readDoc(plain).project.weeklyOff, ['sat', 'sun']);
 });
 
 test('estimated and actual hours are separate, add up under a parent, and show in the description', () => {

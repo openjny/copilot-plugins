@@ -6,7 +6,7 @@
 
 import { readFileSync } from 'node:fs';
 import { t } from './i18n.mjs';
-import { FORMAT, MAX_LEVEL, VERSION, blankTask, checkTasks, fail, finalize, isSummary, parseDate } from './model.mjs';
+import { DEFAULT_WEEKLY_OFF, FORMAT, MAX_LEVEL, VERSION, blankTask, checkTasks, fail, finalize, isSummary, parseDate, sortWeekdays } from './model.mjs';
 import { validate } from './validate.mjs';
 
 export const SCHEMA = JSON.parse(readFileSync(new URL('../schema/gantt-chart.schema.json', import.meta.url), 'utf8'));
@@ -65,10 +65,22 @@ function flatten(nodes, level, out, where, ids) {
   return out;
 }
 
-const readProject = (raw) => ({ name: (raw.name ?? '').trim(), holidays: [...(raw.holidays ?? [])].sort(), workdays: [...(raw.workdays ?? [])].sort(), weekStart: raw.weekStart ?? 'mon' });
+const readProject = (raw) => ({
+  name: (raw.name ?? '').trim(),
+  weeklyOff: sortWeekdays(raw.weeklyOff ?? DEFAULT_WEEKLY_OFF),
+  holidays: [...(raw.holidays ?? [])].sort(),
+  extraWorkdays: [...(raw.extraWorkdays ?? [])].sort(),
+  weekStart: raw.weekStart ?? 'mon',
+});
 
-/** The project as the file holds it: what is still at its default (no worked weekend days, weeks starting on Monday) is left out. */
-const projectNode = (project) => ({ name: project.name, holidays: project.holidays, ...(project.workdays.length && { workdays: project.workdays }), ...(project.weekStart !== 'mon' && { weekStart: project.weekStart }) });
+/** The project as the file holds it: what is still at its default (Saturday and Sunday off, no extra workdays, weeks starting on Monday) is left out. */
+const projectNode = (project) => ({
+  name: project.name,
+  ...(project.weeklyOff.join() !== DEFAULT_WEEKLY_OFF.join() && { weeklyOff: project.weeklyOff }),
+  holidays: project.holidays,
+  ...(project.extraWorkdays.length && { extraWorkdays: project.extraWorkdays }),
+  ...(project.weekStart !== 'mon' && { weekStart: project.weekStart }),
+});
 
 /** A version 2 file differs only in naming its hours "effort" (now "estimate", with "actual" next to it): read it as the current version. */
 function upgradeV2(raw) {

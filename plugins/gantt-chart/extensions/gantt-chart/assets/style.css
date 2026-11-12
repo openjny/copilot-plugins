@@ -152,6 +152,12 @@ button, input, select, textarea { font: inherit; color: inherit; }
 .hc.off { background: var(--off); }
 /* The header cell that holds today */
 .hc.is-today { background: color-mix(in srgb, var(--today) 16%, var(--head)); color: var(--today); font-weight: 600; }
+/* A cell under the pointer (or with its menu open) is tinted; one that covers more than a day zooms the chart to it when clicked. */
+.hc::after { content: ""; position: absolute; inset: 0; pointer-events: none; }
+.hc:hover::after, .hc.target::after { background: color-mix(in srgb, var(--accent) 16%, transparent); }
+.hc.fit { cursor: pointer; }
+/* The same days across the chart body, under the bars. */
+.hband { position: absolute; top: 0; bottom: 0; z-index: 1; pointer-events: none; background: color-mix(in srgb, var(--accent) 9%, transparent); box-shadow: inset 1px 0 0 color-mix(in srgb, var(--accent) 45%, transparent), inset -1px 0 0 color-mix(in srgb, var(--accent) 45%, transparent); }
 .vl { position: absolute; top: 0; bottom: 0; width: 1px; background: var(--line); opacity: 0.7; }
 .off-col { position: absolute; top: 0; bottom: 0; background: var(--off); }
 .today { position: absolute; top: 0; bottom: 0; width: 2px; background: var(--today); opacity: 0.75; z-index: 1; }
@@ -188,6 +194,11 @@ button, input, select, textarea { font: inherit; color: inherit; }
 .fabs { position: absolute; right: 28px; bottom: 28px; z-index: 10; display: flex; flex-direction: column; gap: 8px; }
 .fab { width: 34px; height: 34px; padding: 0; display: inline-flex; align-items: center; justify-content: center; border: 1px solid var(--line); border-radius: 50%; background: color-mix(in srgb, var(--bg) 90%, transparent); color: var(--fg); box-shadow: var(--shadow); opacity: 0.7; cursor: pointer; transition: opacity 0.12s; }
 .fab:hover, .fab:focus-visible { opacity: 1; }
+#today { color: var(--today); }
+/* Where the pointer rests on the red line of today: a dot on the line and a box above it. */
+.today-pin { position: fixed; z-index: 41; width: 0; height: 0; pointer-events: none; }
+.today-pin::before { content: ""; position: absolute; left: -6px; top: -6px; width: 12px; height: 12px; border-radius: 50%; background: var(--today); box-shadow: 0 0 0 3px color-mix(in srgb, var(--today) 30%, transparent); }
+.today-pin span { position: absolute; bottom: 12px; padding: 3px 8px; border-radius: 6px; background: var(--today); color: #fff; font-size: 12px; font-weight: 600; white-space: nowrap; box-shadow: var(--shadow); }
 .fab .icon { width: 18px; height: 18px; }
 
 /* Shown in the middle of the chart while there are no tasks */
@@ -346,6 +357,8 @@ button, input, select, textarea { font: inherit; color: inherit; }
 .swatches { display: flex; flex-wrap: wrap; gap: 6px; }
 .swatch { height: 26px; min-width: 26px; padding: 0 8px; border: 1px solid var(--line); border-radius: 13px; background: var(--bg); cursor: pointer; display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--fg); }
 .swatch[aria-pressed="true"] { border: 2px solid var(--accent); }
+.swatch[data-weekday] { min-width: 34px; justify-content: center; padding: 0 6px; }
+.swatch[data-weekday][aria-pressed="true"] { background: color-mix(in srgb, var(--accent) 16%, var(--bg)); font-weight: 600; }
 .swatch i { width: 12px; height: 12px; border-radius: 50%; background: var(--fill); display: inline-block; }
 .swatch.c-blue { --fill: var(--c-blue-fill); }
 .swatch.c-green { --fill: var(--c-green-fill); }
