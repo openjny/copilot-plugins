@@ -49,13 +49,12 @@ const ICONS = {
   check: 'M5 12l5 5 9-10',
   chevron: 'M6 9l6 6 6-6',
 };
-// Columns of the task list besides the name, in display order.
-const COLS = {
-  no: { label: '#', width: 36, align: 'right' },
-  dur: { labelKey: 'col.dur', width: 56, align: 'right' },
-  res: { labelKey: 'col.res', width: 88 },
-};
-const COLS_WIDTH = Object.values(COLS).reduce((sum, col) => sum + col.width, 0);
+// Columns of the task list. "#" is always shown; the others open with the list and each has a width the user can drag.
+const COL_NO = 36;
+const COL_WIDTH = { name: { min: 120, max: 600, std: 240 }, dur: { min: 44, max: 140, std: 56 }, res: { min: 56, max: 320, std: 88 } };
+const COL_KEYS = Object.keys(COL_WIDTH);
+// Room kept for the timeline when the columns are widened.
+const LIST_MARGIN = 160;
 
 const app = {
   state: null,
@@ -78,11 +77,20 @@ const app = {
   moreOpen: false,
   editing: null,
   editText: '',
+  editingTitle: false,
+  titleText: '',
   drag: null,
+  suggestOwner: null,
+  suggestPlace: null,
+  tagDraft: '',
+  titleRedraw: false,
+  colDrag: null,
   lastClick: null,
   pendingRender: false,
   saving: 'saved',
-  leftW: Math.max(240, Math.min(360, Math.round(window.innerWidth * 0.4))),
+  colW: Object.fromEntries(COL_KEYS.map((key) => [key, COL_WIDTH[key].std])),
+  // Height of the detail panel when the user has dragged it; null lets it fit its content.
+  panelH: null,
   panelKey: '',
   startKey: null,
   theme: THEMES.includes(document.documentElement.dataset.theme) ? document.documentElement.dataset.theme : 'auto',
@@ -90,9 +98,9 @@ const app = {
 };
 
 const $ = (id) => document.getElementById(id);
-const ui = Object.fromEntries(['start', 'editor', 'topbar', 'toolbar', 'banner', 'scroller', 'grid', 'hl', 'ht', 'bl', 'bt', 'panel', 'status', 'project', 'versions', 'confirm', 'toast', 'tip', 'today', 'fit', 'empty', 'ctx'].map((id) => [id, $(id)]));
-// Width of the task list in the scroller: the row numbers are always there, the rest (name, duration, assignee) is off by default.
-const listW = () => (app.listOpen ? app.leftW : COLS.no.width);
+const ui = Object.fromEntries(['start', 'editor', 'topbar', 'toolbar', 'banner', 'scroller', 'grid', 'hl', 'ht', 'bl', 'bt', 'panel', 'psplit', 'splits', 'status', 'project', 'versions', 'confirm', 'toast', 'tip', 'today', 'fit', 'empty', 'ctx', 'suggest'].map((id) => [id, $(id)]));
+/** Width of the task list in the scroller: the row numbers are always there, the rest (name, duration, assignee) is off by default. */
+const listW = () => (app.listOpen ? COL_NO + COL_KEYS.reduce((sum, key) => sum + app.colW[key], 0) : COL_NO);
 
 // ---- Language -----------------------------------------------------------------------------------------------------
 
@@ -111,6 +119,8 @@ function applyLocale() {
   ui.bl.setAttribute('aria-label', t('list.aria'));
   ui.toolbar.setAttribute('aria-label', t('tb.aria'));
   ui.panel.setAttribute('aria-label', t('panel.aria'));
+  ui.psplit.title = t('panel.resize');
+  ui.psplit.setAttribute('aria-label', t('panel.resize'));
   renderEmpty();
 }
 
@@ -173,7 +183,9 @@ function toast(message, kind = 'info') {
 function confirmDialog(message, okLabel) {
   return new Promise((resolve) => {
     const dialog = ui.confirm;
+    const onCancel = () => resolve(false);
     const done = (value) => {
+      dialog.removeEventListener('cancel', onCancel);
       dialog.close();
       resolve(value);
     };
@@ -181,10 +193,34 @@ function confirmDialog(message, okLabel) {
       h('div', { class: 'db' }, h('p', { id: 'confirm-text', style: { margin: '0' } }, message)),
       h('div', { class: 'df' }, h('button', { class: 'btn', type: 'button', onclick: () => done(false) }, t('dlg.cancel')), h('button', { class: 'btn primary', type: 'button', onclick: () => done(true) }, okLabel)),
     );
-    dialog.addEventListener('cancel', () => resolve(false), { once: true });
+    dialog.addEventListener('cancel', onCancel, { once: true });
     dialog.showModal();
   });
 }
+
+/**
+ * Clicking the dimmed area around a modal closes it, as Esc does. The press and the release must both be outside the
+ * box, so that selecting text in a field and letting go outside does not close it.
+ */
+function closeOnBackdrop(dialog) {
+  const outside = (event) => {
+    const rect = dialog.getBoundingClientRect();
+    return event.target === dialog && (event.clientX < rect.left || event.clientX > rect.right || event.clientY < rect.top || event.clientY > rect.bottom);
+  };
+  let pressed = false;
+  dialog.addEventListener('pointerdown', (event) => {
+    pressed = outside(event);
+  });
+  dialog.addEventListener('click', (event) => {
+    const hit = pressed && outside(event);
+    pressed = false;
+    if (!hit) return;
+    // The same event Esc raises, so that a pending confirmation is answered with "no".
+    dialog.dispatchEvent(new Event('cancel', { cancelable: true }));
+    dialog.close();
+  });
+}
+for (const dialog of [ui.project, ui.versions, ui.confirm]) closeOnBackdrop(dialog);
 
 // ---- Data access ----------------------------------------------------------------------------------------------
 
@@ -408,7 +444,6 @@ function relocalize() {
 function openSettingsMenu(event) {
   const radio = (choices, current, label, run, iconOf) => choices.map((value) => ({ label: label(value), icon: iconOf?.(value), checked: value === current, run: () => run(value) }));
   showMenu(event.currentTarget, [
-    { label: t('menu.project'), icon: 'sliders', run: openProject },
     { label: t('menu.versions'), icon: 'history', run: openVersions },
     { label: t('menu.export'), icon: 'download', run: () => document.getElementById('export-link')?.click() },
     { separator: true },
@@ -420,8 +455,54 @@ function openSettingsMenu(event) {
   ]);
 }
 
+/** Renames the project from the title in the top bar: double-click to edit, Enter or leaving the field to save, Esc to cancel. */
+function startTitleEdit() {
+  app.editingTitle = true;
+  app.titleText = app.state.doc.project.name;
+  renderTop();
+  const input = ui.topbar.querySelector('.title-input');
+  input?.focus();
+  input?.select();
+}
+
+function finishTitleEdit(commit) {
+  if (!app.editingTitle) return;
+  const text = app.titleText.trim();
+  app.editingTitle = false;
+  renderTop();
+  if (commit && text !== app.state.doc.project.name) send([{ op: 'project', name: text }]);
+}
+
 function renderTop() {
   const { file, doc } = app.state;
+  // The title is a text field while it is being edited; a redraw in the middle (a change from outside) keeps what was typed.
+  const typing = ui.topbar.querySelector('.title-input');
+  const caret = typing && document.activeElement === typing ? [typing.selectionStart, typing.selectionEnd] : null;
+  const shown = doc.project.name || file.name;
+  const title = app.editingTitle
+    ? h('input', {
+        class: 'title-input',
+        type: 'text',
+        value: app.titleText,
+        maxlength: '200',
+        placeholder: file.name,
+        'aria-label': t('project.name'),
+        oninput: (event) => {
+          app.titleText = event.target.value;
+        },
+        onkeydown: (event) => {
+          event.stopPropagation();
+          if (event.isComposing || event.keyCode === 229) return;
+          if (event.key === 'Enter') finishTitleEdit(true);
+          else if (event.key === 'Escape') finishTitleEdit(false);
+        },
+        onblur: () => {
+          if (!app.titleRedraw) finishTitleEdit(true);
+        },
+      })
+    : h('span', { class: 'title', title: t('top.rename', { name: shown }), ondblclick: startTitleEdit }, shown);
+  // Taking the old field out of the page blurs it; that must not count as leaving it.
+  app.titleRedraw = true;
   ui.topbar.replaceChildren(
     h(
       'button',
@@ -441,7 +522,12 @@ function renderTop() {
       '←',
       h('span', { class: 'label' }, t('top.backLabel')),
     ),
-    h('div', { class: 'ttl' }, h('span', { class: 'title', title: doc.project.name || file.name }, doc.project.name || file.name), h('span', { class: 'file', title: file.path }, file.name)),
+    h(
+      'div',
+      { class: 'ttl' },
+      h('div', { class: 'tname' }, title, h('button', { id: 'project-settings', class: 'btn flat square', type: 'button', title: t('project.title'), 'aria-label': t('project.title'), onclick: openProject }, icon('sliders'))),
+      h('span', { class: 'file', title: file.path }, file.name),
+    ),
     h('span', { class: 'spacer' }),
     h('span', { id: 'save', class: 'save', 'aria-live': 'polite' }),
     h(
@@ -464,6 +550,12 @@ function renderTop() {
     h('button', { class: 'btn square', type: 'button', title: t('menu.title'), 'aria-label': t('menu.title'), 'aria-haspopup': 'menu', onclick: openSettingsMenu }, icon('menu')),
     h('a', { id: 'export-link', hidden: true, href: '/api/export', download: file.name }),
   );
+  app.titleRedraw = false;
+  if (app.editingTitle) {
+    const input = ui.topbar.querySelector('.title-input');
+    input?.focus();
+    if (caret) input?.setSelectionRange(caret[0], caret[1]);
+  }
   setSaving(app.saving);
 }
 
@@ -583,7 +675,80 @@ function openColorMenu(anchor) {
 
 const setColor = (ids, color) => send(ids.map((id) => ({ op: 'update', id, color })));
 
-const clampLeftWidth = (width) => Math.max(COLS_WIDTH + 40, Math.min(width, 720, ui.scroller.clientWidth - 160));
+/** Sets the width of a list column, within its limits and so that the timeline keeps some room. */
+function setColWidth(key, width) {
+  const others = listW() - app.colW[key];
+  const room = Math.max(others + COL_WIDTH[key].min, ui.scroller.clientWidth - LIST_MARGIN);
+  app.colW[key] = Math.round(clamp(width, COL_WIDTH[key].min, Math.min(COL_WIDTH[key].max, room - others)));
+}
+
+/** Puts the column widths into the grid (the list is one sticky column of the grid; its rows share the same columns). */
+function applyCols() {
+  ui.grid.style.setProperty('--leftW', `${listW()}px`);
+  ui.grid.style.setProperty('--cols', app.listOpen ? `${COL_NO}px ${COL_KEYS.map((key) => `${app.colW[key]}px`).join(' ')}` : `${COL_NO}px`);
+}
+
+/** Moves the drag handles to the right edge of their columns. */
+function placeSplits() {
+  let x = COL_NO;
+  for (const key of COL_KEYS) {
+    x += app.colW[key];
+    const el = ui.splits.querySelector(`[data-key="${key}"]`);
+    if (el) el.style.left = `${x - 4}px`;
+  }
+}
+
+/**
+ * The draggable lines at the right edge of each list column, as tall as the chart. Dragging one sets the width of the
+ * column on its left (the list grows or shrinks with it); a double-click puts it back to its standard width.
+ */
+function renderSplits() {
+  ui.splits.hidden = !app.listOpen;
+  if (!app.listOpen) return ui.splits.replaceChildren();
+  ui.splits.style.setProperty('--sb-h', `${ui.scroller.offsetHeight - ui.scroller.clientHeight}px`);
+  // A state update during a drag must not replace the handle that holds the pointer.
+  if (app.colDrag) return placeSplits();
+  ui.splits.replaceChildren(
+    ...COL_KEYS.map((key) => {
+      const label = t('col.resize', { name: t(`col.${key}`) });
+      const el = h('div', { class: 'split', role: 'separator', 'aria-orientation': 'vertical', tabindex: '0', 'data-key': key, title: label, 'aria-label': label });
+      el.addEventListener('pointerdown', (event) => {
+        if (event.button !== 0) return;
+        event.preventDefault();
+        el.setPointerCapture(event.pointerId);
+        app.colDrag = { key, x0: event.clientX, w0: app.colW[key], moved: false };
+        el.classList.add('dragging');
+      });
+      el.addEventListener('pointermove', (event) => {
+        const drag = app.colDrag;
+        if (!drag) return;
+        if (Math.abs(event.clientX - drag.x0) > 3) drag.moved = true;
+        setColWidth(drag.key, drag.w0 + event.clientX - drag.x0);
+        applyCols();
+        placeSplits();
+      });
+      // A double-click (counted by isDoubleClick, as the press is handled here) puts the column back to its standard width.
+      const release = (event) => {
+        const drag = app.colDrag;
+        if (!drag) return;
+        app.colDrag = null;
+        if (event.type === 'pointerup' && !drag.moved && isDoubleClick(event, `split:${key}`)) setColWidth(key, COL_WIDTH[key].std);
+        renderChart();
+      };
+      el.addEventListener('pointerup', release);
+      el.addEventListener('pointercancel', release);
+      el.addEventListener('keydown', (event) => {
+        if (event.key !== 'ArrowLeft' && event.key !== 'ArrowRight') return;
+        event.preventDefault();
+        setColWidth(key, app.colW[key] + (event.key === 'ArrowRight' ? 16 : -16));
+        renderChart();
+        ui.splits.querySelector(`[data-key="${key}"]`)?.focus();
+      });
+      return el;
+    }),
+  );
+  placeSplits();
+}
 
 // The list is drawn over the left of the scroller, so the first day in view stays the same either way.
 function toggleList() {
@@ -977,14 +1142,14 @@ function renderChart() {
   const sum = summarySize();
   ui.grid.style.setProperty('--sbar-h', `${sum.bar}px`);
   ui.grid.style.setProperty('--sum-lh', `${sum.label}px`);
-  ui.grid.style.setProperty('--leftW', `${listW()}px`);
-  ui.grid.style.setProperty('--cols', app.listOpen ? `${COLS.no.width}px 1fr ${COLS.dur.width}px ${COLS.res.width}px` : `${COLS.no.width}px`);
+  applyCols();
   ui.grid.style.setProperty('--tlW', `${app.range.width}px`);
   updateBodyMin();
   renderTimelineHeader();
   renderLeftHeader();
   renderLeft();
   renderBody();
+  renderSplits();
   const { start, ppd } = app.range;
   // The range grew to the left: shift the scroll position so the days in view stay where they were.
   if (prev && prev.ppd === ppd && prev.start !== start) ui.scroller.scrollLeft += (prev.start - start) * ppd;
@@ -1020,36 +1185,10 @@ function growRange() {
 }
 
 function renderLeftHeader() {
-  const splitter = h('div', { class: 'splitter', role: 'separator', 'aria-orientation': 'vertical', 'aria-label': t('list.width'), tabindex: '0' });
-  const resize = (width) => {
-    app.leftW = clampLeftWidth(width);
-    ui.grid.style.setProperty('--leftW', `${app.leftW}px`);
-  };
-  splitter.addEventListener('pointerdown', (event) => {
-    event.preventDefault();
-    splitter.setPointerCapture(event.pointerId);
-    const x0 = event.clientX;
-    const w0 = app.leftW;
-    const move = (e) => resize(w0 + e.clientX - x0);
-    const up = () => {
-      splitter.removeEventListener('pointermove', move);
-      splitter.removeEventListener('pointerup', up);
-      renderChart();
-    };
-    splitter.addEventListener('pointermove', move);
-    splitter.addEventListener('pointerup', up);
-  });
-  splitter.addEventListener('keydown', (event) => {
-    if (event.key !== 'ArrowLeft' && event.key !== 'ArrowRight') return;
-    event.preventDefault();
-    resize(app.leftW + (event.key === 'ArrowRight' ? 16 : -16));
-    renderChart();
-    ui.hl.querySelector('.splitter')?.focus();
-  });
-  const head = (key) => h('div', COLS[key].align ? { style: { textAlign: COLS[key].align } } : {}, COLS[key].label ?? t(COLS[key].labelKey));
+  const cell = (text, align) => h('div', align ? { style: { textAlign: align } } : {}, text);
   // Only the row numbers while the list is folded; the name, duration and assignee columns follow when it is open.
-  if (!app.listOpen) return ui.hl.replaceChildren(h('div', { class: 'cols' }, head('no')));
-  ui.hl.replaceChildren(h('div', { class: 'cols' }, head('no'), h('div', {}, t('col.name')), head('dur'), head('res')), splitter);
+  if (!app.listOpen) return ui.hl.replaceChildren(h('div', { class: 'cols' }, cell('#', 'right')));
+  ui.hl.replaceChildren(h('div', { class: 'cols' }, cell('#', 'right'), cell(t('col.name')), cell(t('col.dur'), 'right'), cell(t('col.res'))));
 }
 
 function renderTimelineHeader() {
@@ -1931,6 +2070,66 @@ async function completeLink(targetId) {
 
 // ---- Detail panel -----------------------------------------------------------------------------------------------
 
+/** The tallest the detail panel may be: the chart above it keeps room for the header and a few rows. */
+const panelMax = () => Math.max(120, window.innerHeight - 380);
+const PANEL_MIN = 90;
+
+/** Fits the panel to what the user dragged (or to its content when they have not); the chart above takes the rest. */
+function applyPanelHeight() {
+  if (app.panelH === null) {
+    ui.panel.style.height = '';
+    ui.panel.style.maxHeight = '';
+    return;
+  }
+  app.panelH = Math.round(clamp(app.panelH, PANEL_MIN, panelMax()));
+  ui.panel.style.height = `${app.panelH}px`;
+  ui.panel.style.maxHeight = 'none';
+}
+
+/** Dragging the top edge of the detail panel (or ↑ ↓ on it) sets its height; a double-click goes back to fitting the content. */
+function wirePanelSplit() {
+  const el = ui.psplit;
+  let drag = null;
+  const setHeight = (height) => {
+    app.panelH = height;
+    applyPanelHeight();
+    updateBodyMin();
+  };
+  el.addEventListener('pointerdown', (event) => {
+    if (event.button !== 0) return;
+    event.preventDefault();
+    el.setPointerCapture(event.pointerId);
+    drag = { y0: event.clientY, h0: ui.panel.offsetHeight, moved: false };
+    el.classList.add('dragging');
+  });
+  el.addEventListener('pointermove', (event) => {
+    if (!drag) return;
+    if (Math.abs(event.clientY - drag.y0) > 3) drag.moved = true;
+    setHeight(drag.h0 + drag.y0 - event.clientY);
+  });
+  // A double-click (counted by isDoubleClick, as the press is handled here) goes back to fitting the content.
+  const release = (event) => {
+    if (!drag) return;
+    const { moved } = drag;
+    drag = null;
+    el.classList.remove('dragging');
+    if (event.type === 'pointerup' && !moved && isDoubleClick(event, 'psplit')) {
+      app.panelH = null;
+      applyPanelHeight();
+    }
+    updateBodyMin();
+    afterPanelToggle();
+  };
+  el.addEventListener('pointerup', release);
+  el.addEventListener('pointercancel', release);
+  el.addEventListener('keydown', (event) => {
+    if (event.key !== 'ArrowUp' && event.key !== 'ArrowDown') return;
+    event.preventDefault();
+    setHeight(ui.panel.offsetHeight + (event.key === 'ArrowUp' ? 16 : -16));
+    afterPanelToggle();
+  });
+}
+
 function renderPanel() {
   if (!app.sched || !app.state.file) return;
   const row = selectedRow();
@@ -1939,8 +2138,11 @@ function renderPanel() {
   const open = app.detailOpen && (several || Boolean(row) || Boolean(link));
   if (open === ui.panel.hidden) {
     ui.panel.hidden = !open;
+    ui.psplit.hidden = !open;
+    applyPanelHeight();
     afterPanelToggle();
   }
+  hideSuggest();
   if (!open) {
     app.panelKey = '';
     return;
@@ -2050,6 +2252,220 @@ ui.panel.addEventListener('keydown', (event) => {
 
 const labeled = (text, control, className) => h('label', className ? { class: className } : {}, text, control);
 
+// ---- Tag input (assignees: pick from what the chart already uses, or create) ---------------------------------------------
+
+/** For comparing names: width, case and surrounding spaces do not matter. */
+const norm = (text) => text.normalize('NFKC').trim().toLowerCase();
+const MAX_TAGS = 20;
+const MAX_TAG_LENGTH = 50;
+
+/** Every assignee used in the chart with the number of tasks that use it, the most used first. */
+function knownResources() {
+  const counts = new Map();
+  for (const task of tasks()) for (const name of task.resources) counts.set(name, (counts.get(name) ?? 0) + 1);
+  return [...counts].map(([name, count]) => ({ name, count })).sort((a, b) => b.count - a.count || a.name.localeCompare(b.name, getLocale()));
+}
+
+function hideSuggest() {
+  ui.suggest.hidden = true;
+  ui.suggest.replaceChildren();
+  app.suggestOwner = null;
+  app.suggestPlace = null;
+}
+
+/**
+ * A field of chips, in the style of a tag picker. Typing searches the values the chart already has; the last row offers
+ * to create what was typed when nothing matches it exactly. Enter or a click picks the highlighted row, "," (or "、")
+ * takes the text as it is, Backspace on an empty field removes the last chip, and Esc closes the list.
+ * `onChange(values)` is called after every change.
+ */
+function tagInput({ values, ariaLabel, placeholder, onChange }) {
+  let tags = [...values];
+  // What was being typed survives the redraw that follows a change (the panel is built again from the saved chart).
+  let query = app.tagDraft;
+  let active = 0;
+  let open = false;
+  let list = [];
+  const box = h('div', { class: 'tags' });
+  const input = h('input', { class: 'tag-input', 'data-field': 'resources', role: 'combobox', 'aria-expanded': 'false', 'aria-autocomplete': 'list', 'aria-controls': 'suggest', 'aria-label': ariaLabel, autocomplete: 'off', spellcheck: 'false', maxlength: String(MAX_TAG_LENGTH) });
+  box.append(input);
+  input.value = query;
+
+  const options = () => {
+    const q = norm(query);
+    const taken = new Set(tags.map(norm));
+    const free = knownResources().filter((item) => !taken.has(norm(item.name)));
+    const found = q ? free.filter((item) => norm(item.name).includes(q)).sort((a, b) => Number(norm(b.name).startsWith(q)) - Number(norm(a.name).startsWith(q))) : free;
+    const rows = found.map((item) => ({ kind: 'existing', name: item.name, count: item.count }));
+    // Nothing is offered to create when the text is already a chip or already exists.
+    if (q && !taken.has(q) && !free.some((item) => norm(item.name) === q) && tags.length < MAX_TAGS) rows.push({ kind: 'create', name: query.trim().slice(0, MAX_TAG_LENGTH) });
+    return rows;
+  };
+
+  const highlight = () => {
+    [...ui.suggest.children].forEach((row, i) => {
+      row.classList.toggle('on', i === active);
+      row.setAttribute('aria-selected', String(i === active));
+    });
+    ui.suggest.children[active]?.scrollIntoView({ block: 'nearest' });
+    if (list.length) input.setAttribute('aria-activedescendant', `sg-${active}`);
+  };
+
+  /** Puts the list under the field, or above it when the panel is at the bottom of the window and there is no room below. */
+  const place = () => {
+    const rect = box.getBoundingClientRect();
+    const s = ui.suggest;
+    s.style.width = `${Math.max(rect.width, 220)}px`;
+    s.style.left = `${Math.max(4, Math.min(rect.left, window.innerWidth - s.offsetWidth - 4))}px`;
+    s.style.maxHeight = '240px';
+    const below = window.innerHeight - rect.bottom - 8;
+    const above = rect.top - 8;
+    const up = s.offsetHeight > below && above > below;
+    s.style.maxHeight = `${Math.max(80, Math.min(240, up ? above : below))}px`;
+    s.style.top = `${up ? rect.top - s.offsetHeight - 4 : rect.bottom + 4}px`;
+  };
+
+  const draw = () => {
+    list = open ? options() : [];
+    if (!list.length) {
+      if (app.suggestOwner === input) hideSuggest();
+      input.setAttribute('aria-expanded', 'false');
+      input.removeAttribute('aria-activedescendant');
+      return;
+    }
+    active = Math.min(active, list.length - 1);
+    ui.suggest.replaceChildren(
+      ...list.map((item, i) =>
+        h(
+          'div',
+          { class: `sg-item${item.kind === 'create' ? ' create' : ''}`, id: `sg-${i}`, role: 'option', 'aria-selected': 'false', onmousedown: (event) => event.preventDefault(), onmousemove: () => { if (active !== i) { active = i; highlight(); } }, onclick: () => choose(i) },
+          item.kind === 'create' ? [icon('plus'), h('span', { class: 'sg-name' }, t('tags.create', { name: item.name }))] : [h('span', { class: 'sg-name' }, item.name), h('span', { class: 'sg-count' }, t('tags.used', { count: item.count }))],
+        ),
+      ),
+    );
+    ui.suggest.hidden = false;
+    app.suggestOwner = input;
+    app.suggestPlace = place;
+    input.setAttribute('aria-expanded', 'true');
+    place();
+    highlight();
+  };
+
+  const paint = () => {
+    box.querySelectorAll('.chip').forEach((chip) => chip.remove());
+    tags.forEach((name, i) =>
+      box.insertBefore(
+        h('span', { class: 'chip' }, h('span', { class: 'chip-name', title: name }, name), h('button', { class: 'chip-x', type: 'button', tabindex: '-1', 'aria-label': t('tags.remove', { name }), onmousedown: (event) => event.preventDefault(), onclick: () => remove(i) }, '×')),
+        input,
+      ),
+      );
+    input.placeholder = tags.length ? '' : placeholder;
+    draw();
+  };
+
+  /** Adds names (ones that are already chips are skipped; one that exists keeps its spelling) and reports the change once. */
+  const add = (names) => {
+    const known = knownResources();
+    let changed = false;
+    for (const raw of names) {
+      const name = raw.trim().slice(0, MAX_TAG_LENGTH);
+      if (!name || tags.length >= MAX_TAGS || tags.some((tag) => norm(tag) === norm(name))) continue;
+      tags = [...tags, known.find((item) => norm(item.name) === norm(name))?.name ?? name];
+      changed = true;
+    }
+    query = '';
+    app.tagDraft = '';
+    input.value = '';
+    active = 0;
+    paint();
+    if (changed) onChange(tags);
+  };
+
+  const remove = (i) => {
+    tags = tags.filter((_, j) => j !== i);
+    paint();
+    onChange(tags);
+  };
+
+  const choose = (i) => {
+    const item = list[i];
+    if (item) add([item.name]);
+  };
+
+  input.addEventListener('focus', () => {
+    open = true;
+    draw();
+  });
+  input.addEventListener('blur', () => {
+    // What was typed but not picked is dropped.
+    open = false;
+    query = '';
+    app.tagDraft = '';
+    input.value = '';
+    if (app.suggestOwner === input) hideSuggest();
+  });
+  input.addEventListener('input', (event) => {
+    open = true;
+    active = 0;
+    if (!event.isComposing && /[,、]/.test(input.value)) {
+      const parts = input.value.split(/[,、]/);
+      const rest = parts.pop();
+      add(parts);
+      query = rest;
+      app.tagDraft = rest;
+      input.value = rest;
+      return draw();
+    }
+    query = input.value;
+    app.tagDraft = query;
+    draw();
+  });
+  input.addEventListener('keydown', (event) => {
+    // While an IME is converting text, Enter and the arrows belong to it.
+    if (event.isComposing || event.keyCode === 229) return;
+    switch (event.key) {
+      case 'Enter':
+        event.preventDefault();
+        if (list.length) choose(active);
+        else if (query.trim()) add([query]);
+        break;
+      case 'ArrowDown':
+      case 'ArrowUp':
+        event.preventDefault();
+        open = true;
+        if (!list.length) return draw();
+        active = (active + (event.key === 'ArrowDown' ? 1 : -1) + list.length) % list.length;
+        highlight();
+        break;
+      case 'Backspace':
+        if (input.value === '' && tags.length) {
+          event.preventDefault();
+          remove(tags.length - 1);
+        }
+        break;
+      case 'Escape':
+        // The first Esc closes the list; the next one is left to the panel.
+        if (list.length) {
+          event.preventDefault();
+          event.stopPropagation();
+          open = false;
+          draw();
+        }
+        break;
+      default:
+    }
+  });
+  box.addEventListener('click', (event) => {
+    if (event.target === box) input.focus();
+  });
+  paint();
+  return box;
+}
+
+// The list follows the field when the panel scrolls (focusing a field near the edge scrolls it into view).
+ui.panel.addEventListener('scroll', () => app.suggestPlace?.(), true);
+window.addEventListener('resize', hideSuggest);
+
 function taskForm(row) {
   const task = taskById(row.id);
   const parent = row.summary;
@@ -2150,7 +2566,7 @@ function taskForm(row) {
       }),
     ),
     h('label', { class: 'check' }, h('input', { type: 'checkbox', checked: milestone, disabled: parent, 'data-field': 'milestone', onchange: (event) => commit({ milestone: event.target.checked }) }), t('panel.milestone')),
-    labeled(t('panel.resources'), h('input', { type: 'text', value: task.resources.join(', '), 'data-field': 'resources', onchange: (event) => commit({ resources: event.target.value }) })),
+    h('div', { class: 'lbl wide' }, t('panel.resources'), tagInput({ values: task.resources, ariaLabel: t('panel.resources'), placeholder: t('tags.placeholder'), onChange: (resources) => commit({ resources }) })),
     h(
       'div',
       { class: 'lbl wide' },
@@ -2340,13 +2756,17 @@ document.addEventListener('keydown', (event) => {
 let resizeTimer;
 window.addEventListener('resize', () => {
   clearTimeout(resizeTimer);
-  resizeTimer = setTimeout(() => app.sched && !ui.editor.hidden && renderChart(), 120);
+  resizeTimer = setTimeout(() => {
+    if (app.panelH !== null) applyPanelHeight();
+    if (app.sched && !ui.editor.hidden) renderChart();
+  }, 120);
 });
 
 ui.today.append(icon('today'));
 ui.today.addEventListener('click', scrollToToday);
 ui.fit.append(icon('fit'));
 ui.fit.addEventListener('click', fitAll);
+wirePanelSplit();
 
 applyLocale();
 syncLocale();
