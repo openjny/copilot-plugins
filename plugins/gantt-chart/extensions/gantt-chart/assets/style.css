@@ -126,31 +126,41 @@ button, input, select, textarea { font: inherit; color: inherit; }
 .rowsel { position: absolute; left: 0; right: 0; height: var(--row-h); background: var(--sel); opacity: 0.7; pointer-events: none; }
 .marquee { position: absolute; border: 1px solid var(--accent); background: color-mix(in srgb, var(--accent) 14%, transparent); pointer-events: none; z-index: 6; }
 
-/* Arrows above and below the selected bar start a dependency (see renderConnectors): the top one for a task that
-   comes before (orange), the bottom one for a task that comes after (blue). They follow the pointer along the bar. */
-.conn { position: absolute; z-index: 6; pointer-events: none; --conn-in: light-dark(#d9730d, #f2a14b); --conn-out: var(--accent); }
-.conn-h { position: absolute; width: 26px; height: 15px; left: calc(var(--cx, 50%) - 13px); padding: 0; border: 0; opacity: 0; pointer-events: none; cursor: crosshair; transition: opacity 0.12s; }
-.conn-h.dir-in { background: var(--conn-in); }
-.conn-h.dir-out { background: var(--conn-out); }
-.conn.show .conn-h { opacity: 0.5; pointer-events: auto; }
+/* Arrows above and below the selected bar start a dependency (see renderConnectors): the top one (pointing up,
+   "先行") for a task that comes before, the bottom one (pointing down, "後続") for a task that comes after. Dependencies
+   are drawn in grays only; the two are told apart by direction and by their text. They follow the pointer along the bar. */
+.conn { position: absolute; z-index: 6; pointer-events: none; --conn: light-dark(#616a75, #aab3bd); --conn-fg: light-dark(#ffffff, #14181d); }
+.conn-h { position: absolute; width: 26px; height: 15px; left: calc(var(--cx, 50%) - 13px); padding: 0; border: 0; background: var(--conn); opacity: 0; pointer-events: none; cursor: crosshair; transition: opacity 0.12s; }
+.conn.show .conn-h { opacity: 0.55; pointer-events: auto; }
 .conn.show .conn-h:hover { opacity: 0.95; }
 .conn-top { top: -21px; clip-path: polygon(50% 0, 100% 100%, 0 100%); }
 .conn-bottom { top: calc(100% + 6px); clip-path: polygon(0 0, 100% 0, 50% 100%); }
-.conn-tag { position: absolute; left: calc(var(--cx, 50%) + 18px); display: none; height: 18px; padding: 0 7px; border-radius: 4px; font-size: 11px; line-height: 18px; white-space: nowrap; color: #fff; pointer-events: none; z-index: 1; }
-.conn-tag.dir-in { background: var(--conn-in); }
-.conn-tag.dir-out { background: var(--conn-out); }
-.conn-tag.conn-tag-top { top: -22px; }
-.conn-tag.conn-tag-bottom { top: calc(100% + 5px); }
-.conn.show .conn-h:hover + .conn-tag { display: block; }
+.conn-tag { position: absolute; left: calc(var(--cx, 50%) + 18px); display: none; height: 16px; padding: 0 6px; border-radius: 3px; background: var(--conn); font-size: 11px; line-height: 16px; white-space: nowrap; color: var(--conn-fg); pointer-events: none; z-index: 1; }
+.conn-tag.conn-tag-top { top: -19px; }
+.conn-tag.conn-tag-bottom { top: calc(100% + 6px); }
+.conn.show .conn-tag { display: block; }
 .busy .conn { display: none; }
-.rubber { position: absolute; left: 0; top: 0; pointer-events: none; z-index: 7; --conn-in: light-dark(#d9730d, #f2a14b); }
-.rubber line { stroke: var(--accent); stroke-width: 2; stroke-dasharray: 5 4; }
-.rubber circle { fill: var(--accent); }
-.rubber.dir-in line { stroke: var(--conn-in); }
-.rubber.dir-in circle { fill: var(--conn-in); }
-.bar.link-ok, .sbar.link-ok { outline: 2px solid var(--accent); outline-offset: 1px; }
-.bar.link-bad, .sbar.link-bad { outline: 2px dashed var(--danger); outline-offset: 1px; opacity: 0.6; }
+.rubber { position: absolute; left: 0; top: 0; pointer-events: none; z-index: 7; --conn: light-dark(#616a75, #aab3bd); }
+.rubber line { stroke: var(--conn); stroke-width: 2; stroke-dasharray: 5 4; }
+.rubber circle { fill: var(--conn); }
+.bar.link-ok, .sbar.link-ok { outline: 2px solid var(--fg); outline-offset: 1px; }
+.bar.link-bad, .sbar.link-bad { outline: 2px dashed var(--muted); outline-offset: 1px; opacity: 0.5; cursor: not-allowed; }
 .picked { margin: 0; padding: 0 12px 12px 30px; font-size: 12px; color: var(--fg); columns: 3 220px; }
+
+/* Floating button that scrolls back to today (bottom right of the timeline, clear of the scrollbars) */
+.main { position: relative; }
+.today-fab { position: absolute; right: 28px; bottom: 28px; z-index: 10; width: 34px; height: 34px; padding: 0; display: inline-flex; align-items: center; justify-content: center; border: 1px solid var(--line); border-radius: 50%; background: color-mix(in srgb, var(--bg) 90%, transparent); color: var(--fg); box-shadow: var(--shadow); opacity: 0.7; cursor: pointer; transition: opacity 0.12s; }
+.today-fab:hover, .today-fab:focus-visible { opacity: 1; }
+.today-fab .icon { width: 18px; height: 18px; }
+
+/* + above and below a row number: insert a task there */
+.lrow .c-no { position: relative; overflow: visible; }
+.ins { position: absolute; left: 3px; z-index: 3; width: 15px; height: 15px; padding: 0; display: inline-flex; align-items: center; justify-content: center; border: 1px solid var(--line); border-radius: 50%; background: var(--bg); color: var(--muted); font-size: 12px; line-height: 1; font-weight: 600; cursor: pointer; opacity: 0; pointer-events: none; transition: opacity 0.1s; }
+.ins-before { top: -8px; }
+.ins-after { bottom: -8px; }
+.lrow:first-child .ins-before { top: 1px; }
+.lrow .c-no:hover .ins, .ins:focus-visible { opacity: 1; pointer-events: auto; }
+.ins:hover { color: var(--bg); background: var(--fg); border-color: var(--fg); }
 
 /* Bars */
 .bar { position: absolute; height: var(--bar-h, 18px); border-radius: 3px; background: var(--bar); cursor: grab; touch-action: none; z-index: 2; }
@@ -169,8 +179,8 @@ button, input, select, textarea { font: inherit; color: inherit; }
 .bar.c-purple { --bar: var(--c-purple-bar); --fill: var(--c-purple-fill); }
 .bar.c-teal { --bar: var(--c-teal-bar); --fill: var(--c-teal-fill); }
 .bar.c-gray { --bar: var(--c-gray-bar); --fill: var(--c-gray-fill); }
-.sbar { position: absolute; height: 7px; background: var(--sum); border-radius: 1px; z-index: 2; cursor: pointer; }
-.sbar::before, .sbar::after { content: ""; position: absolute; top: 7px; border: 4px solid transparent; border-top: 5px solid var(--sum); }
+.sbar { position: absolute; height: var(--sbar-h, 7px); background: var(--sum); border-radius: 1px; z-index: 2; cursor: pointer; }
+.sbar::before, .sbar::after { content: ""; position: absolute; top: var(--sbar-h, 7px); border: calc(var(--sbar-h, 7px) * 0.57) solid transparent; border-top: calc(var(--sbar-h, 7px) * 0.71) solid var(--sum); }
 .sbar::before { left: 0; }
 .sbar::after { right: 0; }
 .sbar.c-green { --sum: var(--c-green-fill); }
@@ -181,18 +191,18 @@ button, input, select, textarea { font: inherit; color: inherit; }
 .sbar.c-gray { --sum: var(--c-gray-fill); }
 .sbar.sel { outline: 2px solid var(--accent); outline-offset: 1px; }
 /* Without the task list a parent task is named above its bar */
-.sum-label { position: absolute; height: 14px; line-height: 14px; padding-left: 2px; font-size: 11px; font-weight: 600; color: var(--fg); white-space: nowrap; pointer-events: none; z-index: 3; }
+.sum-label { position: absolute; height: var(--sum-lh, 14px); line-height: var(--sum-lh, 14px); padding: 0 4px; border-radius: 3px; background: color-mix(in srgb, var(--bg) 82%, transparent); font-size: var(--bar-fs, 11px); font-weight: 600; color: var(--fg); white-space: nowrap; pointer-events: none; z-index: 3; }
 /* The label sits right of the bar, clear of the link that leaves the bar end, and above the links so they do not run through the text */
 .after-label { position: absolute; height: var(--bar-h, 18px); display: flex; align-items: center; margin-left: 10px; padding: 0 4px; border-radius: 3px; background: color-mix(in srgb, var(--bg) 88%, transparent); font-size: var(--bar-fs, 11px); color: var(--muted); white-space: nowrap; pointer-events: none; z-index: 3; }
 .links { position: absolute; inset: 0; pointer-events: none; color: var(--muted); z-index: 2; }
 .links path.link { fill: none; stroke: currentColor; stroke-width: 1.2; }
 .links path.hit { fill: none; stroke: transparent; stroke-width: 12; pointer-events: stroke; cursor: pointer; }
-.links path.link.hover { stroke: var(--accent); stroke-width: 2.2; }
+.links path.link.hover { stroke: var(--fg); stroke-width: 2.2; }
 .links .head { fill: var(--muted); }
-.links .head.hi { fill: var(--accent); }
+.links .head.hi { fill: var(--fg); }
 /* While a task is selected, its own arrows are drawn in the accent color and the others fade */
 .links.focus path.link { opacity: 0.3; }
-.links.focus path.link.rel { opacity: 1; stroke: var(--accent); stroke-width: 1.8; }
+.links.focus path.link.rel { opacity: 1; stroke: var(--fg); stroke-width: 1.8; }
 .links path.link.picked { stroke-width: 3; }
 
 /* Detail panel: under the timeline, opened by clicking a task */

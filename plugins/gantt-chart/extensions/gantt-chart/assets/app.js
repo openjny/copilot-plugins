@@ -78,7 +78,7 @@ const app = {
 };
 
 const $ = (id) => document.getElementById(id);
-const ui = Object.fromEntries(['start', 'editor', 'topbar', 'toolbar', 'banner', 'scroller', 'grid', 'hl', 'ht', 'bl', 'bt', 'panel', 'status', 'project', 'versions', 'confirm', 'toast', 'tip'].map((id) => [id, $(id)]));
+const ui = Object.fromEntries(['start', 'editor', 'topbar', 'toolbar', 'banner', 'scroller', 'grid', 'hl', 'ht', 'bl', 'bt', 'panel', 'status', 'project', 'versions', 'confirm', 'toast', 'tip', 'today'].map((id) => [id, $(id)]));
 // Width of the task list in the scroller: the row numbers are always there, the rest (name, duration, assignee) is off by default.
 const listW = () => (app.listOpen ? app.leftW : COLS.no.width);
 
@@ -339,7 +339,6 @@ function renderTop() {
     h('div', { class: 'ttl' }, h('span', { class: 'title', title: doc.project.name || file.name }, doc.project.name || file.name), h('span', { class: 'file', title: file.path }, file.name)),
     h('span', { class: 'spacer' }),
     h('span', { id: 'save', class: 'save', 'aria-live': 'polite' }),
-    h('button', { id: 'today', class: 'btn tbtn', type: 'button', title: '今日の位置に戻る（横スクロール）', 'aria-label': '今日の位置に戻る', onclick: scrollToToday }, icon('today'), h('span', { class: 'label' }, '今日')),
     h(
       'div',
       { class: 'seg', role: 'group', 'aria-label': '表示の単位' },
@@ -527,15 +526,33 @@ function renderToolbar() {
 async function onAdd() {
   const row = selectedRow();
   const results = await send([row ? { op: 'add', after: row.id } : { op: 'add' }]);
-  const id = results?.[0]?.id;
+  focusNewTask(results?.[0]?.id);
+}
+
+/** Selects a task that was just added so its name can be typed. */
+function focusNewTask(id) {
   if (!id) return;
   select(id);
   if (app.listOpen) return startEdit(id);
-  // Without the list the name is typed in the detail panel.
+  // Without the name column the name is typed in the detail panel.
   showDetail(id);
   const input = ui.panel.querySelector('[data-field="name"]');
   input?.focus();
   input?.select();
+}
+
+/**
+ * Adds a task above or below a row, from the + buttons in the row number column. Below an expanded parent the task
+ * becomes its first child (that is where the new line appears on screen); otherwise it takes the level of the row.
+ */
+async function insertTask(where, id) {
+  const list = tasks();
+  const i = list.findIndex((task) => task.id === id);
+  if (i < 0) return;
+  let op = { op: 'add', before: id };
+  if (where === 'after') op = rowById(id).summary && !list[i].collapsed ? { op: 'add', before: list[i + 1].id } : { op: 'add', after: id };
+  const results = await send([op]);
+  focusNewTask(results?.[0]?.id);
 }
 
 async function onDelete() {
@@ -599,6 +616,12 @@ function monthSegments(start, end) {
   return segments;
 }
 
+/** Sizes of a parent task's bar (thickness, the notch under each end) and its label, for the current row height. */
+function summarySize() {
+  const bar = Math.max(6, Math.round(ROW_H * 0.25));
+  return { bar, notch: Math.round(bar * 0.71), label: clamp(Math.round(BAR_H * 0.6), 10, 14) + 3 };
+}
+
 /** Fills the scroller with grid lines even when there are few rows. */
 function updateBodyMin() {
   ui.grid.style.setProperty('--body-min', `${Math.max(app.visible.length * ROW_H, ui.scroller.clientHeight - HEAD_H)}px`);
@@ -618,6 +641,9 @@ function renderChart() {
   ui.grid.style.setProperty('--row-h', `${ROW_H}px`);
   ui.grid.style.setProperty('--bar-h', `${BAR_H}px`);
   ui.grid.style.setProperty('--bar-fs', `${clamp(Math.round(BAR_H * 0.6), 10, 14)}px`);
+  const sum = summarySize();
+  ui.grid.style.setProperty('--sbar-h', `${sum.bar}px`);
+  ui.grid.style.setProperty('--sum-lh', `${sum.label}px`);
   ui.grid.style.setProperty('--leftW', `${listW()}px`);
   ui.grid.style.setProperty('--cols', app.listOpen ? `${COLS.no.width}px 1fr ${COLS.dur.width}px ${COLS.res.width}px` : `${COLS.no.width}px`);
   ui.grid.style.setProperty('--tlW', `${app.range.width}px`);
@@ -723,6 +749,24 @@ function renderTimelineHeader() {
   ui.ht.replaceChildren(top, bottom);
 }
 
+/** The + shown above / below a row number while the pointer is on it. */
+function insertButton(where, row) {
+  const label = where === 'before' ? `#${row.row} の上にタスクを挿入` : `#${row.row} の下にタスクを挿入`;
+  const stop = (event) => event.stopPropagation();
+  return h('button', {
+    class: `ins ins-${where}`,
+    type: 'button',
+    tabindex: '-1',
+    title: label,
+    'aria-label': label,
+    onclick: (event) => {
+      event.stopPropagation();
+      insertTask(where, row.id);
+    },
+    ondblclick: stop,
+  }, '+');
+}
+
 function leftRow(row) {
   const task = taskById(row.id);
   const selected = app.picked.has(row.id);
@@ -767,7 +811,7 @@ function leftRow(row) {
   const el = h(
     'div',
     { ...attrs, onclick: (event) => clickTask(event, row.id), ondblclick: () => startEdit(row.id) },
-    h('div', { class: 'c-no', role: 'gridcell' }, String(row.row)),
+    h('div', { class: 'c-no', role: 'gridcell' }, String(row.row), insertButton('before', row), insertButton('after', row)),
     app.listOpen ? h('div', { class: 'c-name', role: 'gridcell', style: { paddingLeft: `${6 + row.level * 16}px` } }, caret, name) : null,
     app.listOpen ? h('div', { class: 'c-dur', role: 'gridcell' }, formatDuration(row.duration)) : null,
     app.listOpen ? h('div', { class: 'c-res', role: 'gridcell', title: resources }, resources) : null,
@@ -835,12 +879,15 @@ function renderBody() {
     const label = `${task.name}: ${formatDate(row.startDay)} – ${formatDate(row.endDay)}（${formatDuration(row.duration)}）進捗 ${percent}%`;
     const selected = app.picked.has(row.id);
     if (row.summary) {
-      // These offsets are drawn for the standard row height; a taller or shorter row shifts them by half the difference.
-      const shift = Math.round((ROW_H - ROW_STD) / 2);
-      const sbar = h('div', { class: `sbar c-${colorOf(row)}${selected ? ' sel' : ''}`, 'data-id': row.id, role: 'img', 'aria-label': label, title: label, style: { left: `${left}px`, width: `${width}px`, top: `${top + (named ? 14 : 8) + shift}px` } });
+      // A parent is a bar with a notch at each end and, when the names are shown on the bars, its name on top.
+      // Everything grows with the row height, and the block is centered in the row.
+      const { bar: sb, notch, label: lh } = summarySize();
+      const block = (named ? lh : 0) + sb + notch;
+      const y = top + Math.max(0, Math.round((ROW_H - block) / 2));
+      const sbar = h('div', { class: `sbar c-${colorOf(row)}${selected ? ' sel' : ''}`, 'data-id': row.id, role: 'img', 'aria-label': label, title: label, style: { left: `${left}px`, width: `${width}px`, top: `${y + (named ? lh : 0)}px` } });
       wireBar(sbar, row);
       parts.push(sbar);
-      if (named) parts.push(h('div', { class: 'sum-label', style: { left: `${left}px`, top: `${top + 1 + shift}px` } }, `${task.name}  ${percent}%`));
+      if (named) parts.push(h('div', { class: 'sum-label', style: { left: `${left}px`, top: `${y}px` } }, `${task.name}  ${percent}%`));
       else parts.push(h('div', { class: 'after-label', style: { left: `${left + width}px`, top: `${top + 5}px` } }, `${percent}%`));
       continue;
     }
@@ -1356,7 +1403,8 @@ const LINK_TITLE = {
   in: '先行タスクにつなぐ（このタスクの前に済ませるタスクへドラッグ、またはクリックしてからタスクを選ぶ）',
   out: '後続タスクにつなぐ（このタスクの後に始めるタスクへドラッグ、またはクリックしてからタスクを選ぶ）',
 };
-const LINK_TAG = { in: '先行タスクにつなぐ', out: '後続タスクにつなぐ' };
+// Short, always visible text next to each arrow, so the two are told apart without relying on color.
+const LINK_TAG = { in: '先行', out: '後続' };
 const LINK_HINT = {
   in: '先行タスクにするタスクをクリックしてください（Esc で取り消し）',
   out: '後続タスクにするタスクをクリックしてください（Esc で取り消し）',
@@ -1871,6 +1919,9 @@ window.addEventListener('resize', () => {
   clearTimeout(resizeTimer);
   resizeTimer = setTimeout(() => app.sched && !ui.editor.hidden && renderChart(), 120);
 });
+
+ui.today.append(icon('today'));
+ui.today.addEventListener('click', scrollToToday);
 
 buildToolbar();
 try {
