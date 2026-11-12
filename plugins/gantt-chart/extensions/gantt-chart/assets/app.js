@@ -33,6 +33,7 @@ const ICONS = {
   up: 'M12 19V5M6 11l6-6 6 6',
   down: 'M12 5v14M6 13l6 6 6-6',
   sidebar: 'M4 5h16v14H4zM9 5v14',
+  text: 'M4 7V4h16v3M9 20h6M12 4v16',
   sliders: 'M4 6h10M18 6h2M16 4v4M4 12h2M10 12h10M8 10v4M4 18h9M17 18h3M15 16v4',
   history: 'M4 12a8 8 0 1 0 3-6.2M4 4v4h4M12 8v4l3 2',
   today: 'M12 8a4 4 0 1 0 0 8 4 4 0 0 0 0-8zM12 2v3M12 19v3M2 12h3M19 12h3',
@@ -55,6 +56,8 @@ const COL_WIDTH = { name: { min: 120, max: 600, std: 240 }, dur: { min: 44, max:
 const COL_KEYS = Object.keys(COL_WIDTH);
 // Room kept for the timeline when the columns are widened.
 const LIST_MARGIN = 160;
+// A list wider than this share of the canvas leaves too little of the chart: the first time it is shown, the name column gives way.
+const LIST_SHARE = 0.45;
 
 const app = {
   state: null,
@@ -72,7 +75,14 @@ const app = {
   marquee: null,
   zoom: 'day',
   ppd: PPD.day,
-  listOpen: false,
+  listOpen: document.documentElement.dataset.list === 'open',
+  // How far the name, duration and assignee columns are open, 0 to 1: it moves while the list slides in or out.
+  listF: document.documentElement.dataset.list === 'open' ? 1 : 0,
+  listWant: document.documentElement.dataset.list === 'open',
+  listAnim: 0,
+  listFitted: false,
+  // Whether the chart shows the names of the tasks next to or on their bars.
+  labels: document.documentElement.dataset.labels !== 'off',
   detailOpen: false,
   moreOpen: false,
   editing: null,
@@ -100,7 +110,7 @@ const app = {
 const $ = (id) => document.getElementById(id);
 const ui = Object.fromEntries(['start', 'editor', 'topbar', 'toolbar', 'banner', 'scroller', 'grid', 'hl', 'ht', 'bl', 'bt', 'panel', 'psplit', 'splits', 'status', 'project', 'versions', 'confirm', 'toast', 'tip', 'today', 'fit', 'empty', 'ctx', 'suggest'].map((id) => [id, $(id)]));
 /** Width of the task list in the scroller: the row numbers are always there, the rest (name, duration, assignee) is off by default. */
-const listW = () => (app.listOpen ? COL_NO + COL_KEYS.reduce((sum, key) => sum + app.colW[key], 0) : COL_NO);
+const listW = () => COL_NO + (app.listOpen ? COL_KEYS.reduce((sum, key) => sum + app.colW[key], 0) * app.listF : 0);
 
 // ---- Language -----------------------------------------------------------------------------------------------------
 
@@ -652,6 +662,7 @@ function buildToolbar() {
       },
       icon('sidebar'),
     ),
+    button('tb-labels', 'text', t('tb.labels'), toggleLabels),
     h('span', { class: 'sep' }),
     button('tb-undo', 'undo', t('tb.undo'), () => stepHistory('undo')),
     button('tb-redo', 'redo', t('tb.redo'), () => stepHistory('redo')),
@@ -696,7 +707,7 @@ function setColWidth(key, width) {
 /** Puts the column widths into the grid (the list is one sticky column of the grid; its rows share the same columns). */
 function applyCols() {
   ui.grid.style.setProperty('--leftW', `${listW()}px`);
-  ui.grid.style.setProperty('--cols', app.listOpen ? `${COL_NO}px ${COL_KEYS.map((key) => `${app.colW[key]}px`).join(' ')}` : `${COL_NO}px`);
+  ui.grid.style.setProperty('--cols', app.listOpen ? `${COL_NO}px ${COL_KEYS.map((key) => `${app.colW[key] * app.listF}px`).join(' ')}` : `${COL_NO}px`);
 }
 
 /** Moves the drag handles to the right edge of their columns. */
@@ -714,8 +725,10 @@ function placeSplits() {
  * column on its left (the list grows or shrinks with it); a double-click puts it back to its standard width.
  */
 function renderSplits() {
-  ui.splits.hidden = !app.listOpen;
-  if (!app.listOpen) return ui.splits.replaceChildren();
+  // No handles while the list is folded or still sliding.
+  const shown = app.listOpen && app.listF === 1;
+  ui.splits.hidden = !shown;
+  if (!shown) return ui.splits.replaceChildren();
   ui.splits.style.setProperty('--sb-h', `${ui.scroller.offsetHeight - ui.scroller.clientHeight}px`);
   // A state update during a drag must not replace the handle that holds the pointer.
   if (app.colDrag) return placeSplits();
@@ -761,12 +774,62 @@ function renderSplits() {
   placeSplits();
 }
 
-// The list is drawn over the left of the scroller, so the first day in view stays the same either way.
-function toggleList() {
-  app.listOpen = !app.listOpen;
-  if (!app.listOpen) app.editing = null;
+/** Narrows the name column (down to its minimum) so that a list opened in a small canvas does not take most of it. */
+function fitList() {
+  if (app.listFitted || ui.scroller.clientWidth === 0) return;
+  app.listFitted = true;
+  const over = COL_NO + COL_KEYS.reduce((sum, key) => sum + app.colW[key], 0) - ui.scroller.clientWidth * LIST_SHARE;
+  if (over > 0) app.colW.name = Math.max(COL_WIDTH.name.min, app.colW.name - Math.ceil(over));
+}
+
+const LIST_SLIDE_MS = 180;
+const reducedMotion = () => window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+const rememberView = (change) => post('/api/view', change).catch(() => {});
+
+/**
+ * Opens or folds the list. The columns slide in or out (the timeline moves with them and keeps its own scroll position,
+ * so what was in view stays in view), instead of the chart jumping.
+ */
+function setList(open) {
+  if (open === app.listWant) return;
+  app.listWant = open;
+  cancelAnimationFrame(app.listAnim);
+  app.listAnim = 0;
+  if (!open) app.editing = null;
+  rememberView({ list: open });
+  const from = app.listF;
+  const to = open ? 1 : 0;
+  // The cells must exist while they slide, so the list is "open" for the whole move.
+  app.listOpen = true;
+  const done = () => {
+    app.listAnim = 0;
+    app.listF = to;
+    app.listOpen = open;
+    renderChart();
+    renderToolbar();
+  };
+  if (reducedMotion() || from === to) return done();
+  const t0 = performance.now();
+  app.listF = from;
   renderToolbar();
   renderChart();
+  const step = (now) => {
+    const p = Math.min(1, Math.max(0, now - t0) / LIST_SLIDE_MS);
+    app.listF = from + (to - from) * (1 - (1 - p) ** 3);
+    if (p === 1) return done();
+    applyCols();
+    app.listAnim = requestAnimationFrame(step);
+  };
+  app.listAnim = requestAnimationFrame(step);
+}
+
+const toggleList = () => setList(!app.listWant);
+
+function toggleLabels() {
+  app.labels = !app.labels;
+  rememberView({ labels: app.labels });
+  renderToolbar();
+  renderBody();
 }
 
 function siblingExists(list, i, direction) {
@@ -819,7 +882,8 @@ function renderToolbar() {
   color.firstChild.className = `dot c-${shown}`;
   color.title = t('tb.colorWith', { name: colorName(shown) });
   color.setAttribute('aria-label', color.title);
-  $('tb-list').setAttribute('aria-pressed', String(app.listOpen));
+  $('tb-list').setAttribute('aria-pressed', String(app.listWant));
+  $('tb-labels').setAttribute('aria-pressed', String(app.labels));
 }
 
 async function onAdd() {
@@ -1151,6 +1215,7 @@ function updateBodyMin() {
 
 function renderChart() {
   if (!app.sched) return;
+  if (app.listOpen) fitList();
   const rows = app.sched.rows;
   app.visible = rows.filter((row) => !row.hidden);
   if (app.viewPath !== app.state.file.path) {
@@ -1347,7 +1412,7 @@ function finishEdit(commit) {
 function renderBody() {
   cancelLink();
   const { start, days, ppd, today } = app.range;
-  const named = !app.listOpen;
+  const named = app.labels;
   const parts = [];
   const rowTop = new Map(app.visible.map((row, i) => [row.id, i * ROW_H]));
   app.rowTop = rowTop;
@@ -1389,7 +1454,7 @@ function renderBody() {
     const label = t('bar.label', { name: task.name, start: formatDate(row.startDay), end: formatDate(row.endDay), duration: formatDuration(row.duration), progress: percent });
     const selected = app.picked.has(row.id);
     if (row.summary) {
-      // A parent is a bar with a notch at each end and, when the names are shown on the bars, its name on top.
+      // A parent is a bar with a notch at each end and, when the names are shown, its name on top.
       // Everything grows with the row height, and the block is centered in the row.
       const { bar: sb, notch, label: lh } = summarySize();
       const block = (named ? lh : 0) + sb + notch;
@@ -1408,10 +1473,11 @@ function renderBody() {
       const cx = left + ppd / 2;
       const diamond = h('div', { class: `bar ms c-${colorOf(row)}${selected ? ' sel' : ''}`, 'data-id': row.id, role: 'img', 'aria-label': label, title: label, style: { left: `${cx - size / 2}px`, width: `${size}px`, top: `${top + 5}px` } });
       wireBar(diamond, row);
-      parts.push(diamond, h('div', { class: 'after-label', style: { left: `${cx + size / 2}px`, top: `${top + 5}px` } }, task.name));
+      parts.push(diamond);
+      if (named) parts.push(h('div', { class: 'after-label', style: { left: `${cx + size / 2}px`, top: `${top + 5}px` } }, task.name));
       continue;
     }
-    // Without the list the name goes inside the bar when it fits, otherwise after it.
+    // The name goes inside the bar when it fits, otherwise after it; without names only the progress is shown.
     const inside = named ? width >= 80 : width >= 40 && app.zoom === 'day';
     const bar = h(
       'div',
@@ -1422,7 +1488,7 @@ function renderBody() {
     );
     wireBar(bar, row);
     parts.push(bar);
-    if (named ? !inside : !inside || app.zoom !== 'day') parts.push(h('div', { class: 'after-label', style: { left: `${left + width}px`, top: `${top + 5}px` } }, `${task.name}  ${percent}%`));
+    if (named ? !inside : !inside || app.zoom !== 'day') parts.push(h('div', { class: 'after-label', style: { left: `${left + width}px`, top: `${top + 5}px` } }, named ? `${task.name}  ${percent}%` : `${percent}%`));
   }
 
   parts.push(linksLayer(rowTop));
@@ -1439,16 +1505,24 @@ function linksLayer(rowTop) {
   const svg = svgEl('svg', { class: 'links', width, height: Math.max(app.visible.length * ROW_H, 1), 'aria-hidden': 'true' });
   svg.style.setProperty('--lw', `${(1.2 * k).toFixed(2)}px`);
   const defs = svgEl('defs');
-  // The head is drawn in its own color so that the arrows of the selected task can be highlighted (see updateSelection).
-  // Its size is in screen units, not in multiples of the line width, so a thicker (highlighted) line does not blow it up.
-  for (const [id, cls, size] of [['arrow', 'head', 8 * k], ['arrow-hi', 'head hi', 10 * k]]) {
-    const marker = svgEl('marker', { id, viewBox: '0 0 8 8', refX: 8, refY: 4, markerUnits: 'userSpaceOnUse', markerWidth: size.toFixed(2), markerHeight: size.toFixed(2), orient: 'auto' });
-    marker.append(svgEl('path', { d: 'M0,0 L8,4 L0,8 z', class: cls }));
-    defs.append(marker);
+  // The head takes the color of the task it points at, and is its own shape so that the arrows of the selected task can
+  // be highlighted (see updateLinks). Its size is in screen units, not in multiples of the line width, so a thicker
+  // (highlighted) line does not blow it up.
+  for (const color of PALETTE) {
+    for (const [id, cls, size] of [['arrow', 'head', 8 * k], ['arrow-hi', 'head hi', 10 * k]]) {
+      const marker = svgEl('marker', { id: `${id}-${color}`, viewBox: '0 0 8 8', refX: 8, refY: 4, markerUnits: 'userSpaceOnUse', markerWidth: size.toFixed(2), markerHeight: size.toFixed(2), orient: 'auto' });
+      marker.append(svgEl('path', { d: 'M0,0 L8,4 L0,8 z', class: `${cls} c-${color}` }));
+      defs.append(marker);
+    }
   }
   svg.append(defs);
-  for (const link of layoutLinks(rowTop, start, ppd)) {
-    const path = svgEl('path', { class: 'link', d: link.d, 'marker-end': 'url(#arrow)', 'data-from': link.from.id, 'data-to': link.to.id });
+  layoutLinks(rowTop, start, ppd).forEach((link, i) => {
+    // The line runs from the color of the task it leaves to the color of the task it enters.
+    const [from, to] = [colorOf(link.from), colorOf(link.to)];
+    const gradient = svgEl('linearGradient', { id: `lg-${i}`, gradientUnits: 'userSpaceOnUse', x1: link.x1, y1: link.sy, x2: link.x2, y2: link.ey });
+    gradient.append(svgEl('stop', { offset: 0, class: `c-${from}` }), svgEl('stop', { offset: 1, class: `c-${to}` }));
+    defs.append(gradient);
+    const path = svgEl('path', { class: 'link', d: link.d, stroke: `url(#lg-${i})`, 'marker-end': `url(#arrow-${to})`, 'data-from': link.from.id, 'data-to': link.to.id, 'data-end': to });
     // A wider invisible stroke on top makes the thin arrow easy to point at.
     const hit = svgEl('path', { class: 'hit', d: link.d, 'data-from': link.from.id, 'data-to': link.to.id });
     hit.addEventListener('pointerdown', (event) => {
@@ -1464,7 +1538,7 @@ function linksLayer(rowTop) {
       showMenu(event, [{ label: t('ctx.deleteLink'), icon: 'trash', danger: true, hint: 'Del', run: deleteLink }]);
     });
     svg.append(path, hit);
-  }
+  });
   return svg;
 }
 
@@ -1598,7 +1672,7 @@ function updateLinks() {
     const on = related.includes(path);
     path.classList.toggle('rel', on);
     path.classList.toggle('picked', on && Boolean(link));
-    path.setAttribute('marker-end', on ? 'url(#arrow-hi)' : 'url(#arrow)');
+    path.setAttribute('marker-end', `url(#arrow${on ? '-hi' : ''}-${path.dataset.end})`);
   }
   // Later elements are drawn on top, so move the highlighted arrows to the end.
   svg.append(...related);

@@ -170,3 +170,30 @@ export const loadTheme = () => loadChoice('theme', THEMES);
 export const saveTheme = (theme) => saveChoice('theme', theme, THEMES);
 export const loadLocale = () => loadChoice('locale', LOCALE_PREFS);
 export const saveLocale = (locale) => saveChoice('locale', locale, LOCALE_PREFS);
+
+/** What the page shows besides the chart itself, as the user left it: the task names on the chart, and the task list on the left. */
+export const VIEW_DEFAULT = { labels: true, list: false };
+
+export async function loadView() {
+  try {
+    const saved = JSON.parse(await fs.readFile(prefFile('view'), 'utf8'));
+    return Object.fromEntries(Object.entries(VIEW_DEFAULT).map(([key, fallback]) => [key, typeof saved[key] === 'boolean' ? saved[key] : fallback]));
+  } catch {
+    return { ...VIEW_DEFAULT };
+  }
+}
+
+/** Saves the given switches (`labels`, `list`); the ones left out keep their value. */
+export async function saveView(change) {
+  const view = await loadView();
+  for (const [key, value] of Object.entries(change ?? {})) {
+    if (!(key in VIEW_DEFAULT) || typeof value !== 'boolean') fail('invalid_request', 'err.badChoice', { name: key, choices: 'true / false' });
+    view[key] = value;
+  }
+  try {
+    await fs.mkdir(dataDir(), { recursive: true });
+    await writeAtomic(prefFile('view'), `${JSON.stringify(view)}\n`);
+  } catch (error) {
+    throw ioError(error, 'io.savePref');
+  }
+}

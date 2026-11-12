@@ -168,6 +168,7 @@ export default {
 
   'tb.aria': 'タスクの操作',
   'tb.list': 'タスク名・期間・担当の表示 / 非表示（# は常に表示）',
+  'tb.labels': 'チャート上のタスク名の表示 / 非表示',
   'tb.undo': '元に戻す（Ctrl+Z）',
   'tb.undoWith': '元に戻す: {label}（Ctrl+Z）',
   'tb.redo': 'やり直す（Ctrl+Y）',

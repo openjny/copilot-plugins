@@ -245,15 +245,23 @@ button, input, select, textarea { font: inherit; color: inherit; }
 .sum-label { position: absolute; height: var(--sum-lh, 14px); line-height: var(--sum-lh, 14px); padding: 0 4px; border-radius: 3px; background: color-mix(in srgb, var(--bg) 82%, transparent); font-size: var(--bar-fs, 11px); font-weight: 600; color: var(--fg); white-space: nowrap; pointer-events: none; z-index: 3; }
 /* The label sits right of the bar, clear of the link that leaves the bar end, and above the links so they do not run through the text */
 .after-label { position: absolute; height: var(--bar-h, 18px); display: flex; align-items: center; margin-left: calc(10px * var(--k, 1)); padding: 0 4px; border-radius: 3px; background: color-mix(in srgb, var(--bg) 88%, transparent); font-size: var(--bar-fs, 11px); color: var(--muted); white-space: nowrap; pointer-events: none; z-index: 3; }
-.links { position: absolute; inset: 0; pointer-events: none; color: var(--muted); z-index: 2; --lw: 1.2px; }
-.links path.link { fill: none; stroke: currentColor; stroke-width: var(--lw); }
+.links { position: absolute; inset: 0; pointer-events: none; z-index: 2; --lw: 1.2px; }
+/* A line runs from the color of the task it leaves to the color of the task it enters (a gradient, see linksLayer) */
+.links path.link { fill: none; stroke-width: var(--lw); opacity: 0.85; }
 .links path.hit { fill: none; stroke: transparent; stroke-width: calc(var(--lw) * 10); pointer-events: stroke; cursor: pointer; }
-.links path.link.hover { stroke: var(--fg); stroke-width: calc(var(--lw) * 1.8); }
-.links .head { fill: var(--muted); }
-.links .head.hi { fill: var(--fg); }
-/* While a task is selected, its own arrows are drawn in the dark gray and the others fade */
-.links.focus path.link { opacity: 0.3; }
-.links.focus path.link.rel { opacity: 1; stroke: var(--fg); stroke-width: calc(var(--lw) * 1.5); }
+.links path.link.hover { stroke-width: calc(var(--lw) * 1.8); opacity: 1; }
+.links .c-blue { --tone: var(--c-blue-fill); }
+.links .c-green { --tone: var(--c-green-fill); }
+.links .c-orange { --tone: var(--c-orange-fill); }
+.links .c-red { --tone: var(--c-red-fill); }
+.links .c-purple { --tone: var(--c-purple-fill); }
+.links .c-pink { --tone: var(--c-pink-fill); }
+.links .c-gray { --tone: var(--c-gray-fill); }
+.links stop { stop-color: var(--tone); }
+.links .head { fill: var(--tone); }
+/* While a task is selected, its own arrows are drawn thicker and the others fade */
+.links.focus path.link { opacity: 0.25; }
+.links.focus path.link.rel { opacity: 1; stroke-width: calc(var(--lw) * 1.5); }
 .links path.link.picked { stroke-width: calc(var(--lw) * 2.2); }
 
 /* Detail panel: under the timeline, opened by clicking a task. It is as small as its content (progress, effort and note

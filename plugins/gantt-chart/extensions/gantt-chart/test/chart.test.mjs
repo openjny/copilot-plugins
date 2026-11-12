@@ -215,3 +215,20 @@ test('the chosen language is saved and put on the page, and the messages that co
   assert.equal((await choose('fr')).status, 400);
   assert.equal(await locale(), 'auto');
 });
+
+test('the view choices (task names on the chart, task list) are saved one by one and put on the page', async () => {
+  const chart = newChart();
+  await chart.ensureServer();
+  await chart.openFile('view.gantt.json');
+  const attrs = async () => (await (await fetch(chart.url)).text()).match(/data-list="(\w+)" data-labels="(\w+)"/)?.slice(1).join(',');
+  const choose = (body) => fetch(`${chart.url}api/view`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+
+  assert.equal(await attrs(), 'closed,on');
+  assert.equal((await choose({ list: true })).status, 200);
+  assert.equal(await attrs(), 'open,on');
+  assert.equal((await choose({ labels: false })).status, 200);
+  assert.equal(await attrs(), 'open,off');
+  assert.equal((await choose({ list: 'yes' })).status, 400);
+  assert.equal((await choose({ zoom: true })).status, 400);
+  assert.equal(await attrs(), 'open,off');
+});

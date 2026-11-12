@@ -4,7 +4,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { LOCALE_CHOICES, resolveLocale, setLocale, t } from './i18n.mjs';
 import { ModelError, fail } from './model.mjs';
-import { loadLocale, loadTheme, saveLocale, saveTheme } from './store.mjs';
+import { loadLocale, loadTheme, loadView, saveLocale, saveTheme, saveView } from './store.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const JS = 'text/javascript; charset=utf-8';
@@ -77,9 +77,10 @@ export async function startServer(chart, { log }) {
 
     if (req.method === 'GET') {
       if (url.pathname === '/') {
-        // Put the saved theme and language choice on <html> so the first paint already uses them.
-        const [theme, locale] = await Promise.all([loadTheme(), loadLocale()]);
-        const html = (await fs.readFile(FILES['/'][0], 'utf8')).replace('<html ', `<html data-theme="${theme}" data-locale="${locale}" `);
+        // Put the saved theme, language and view choices on <html> so the first paint already uses them.
+        const [theme, locale, view] = await Promise.all([loadTheme(), loadLocale(), loadView()]);
+        const attrs = `data-theme="${theme}" data-locale="${locale}" data-list="${view.list ? 'open' : 'closed'}" data-labels="${view.labels ? 'on' : 'off'}"`;
+        const html = (await fs.readFile(FILES['/'][0], 'utf8')).replace('<html ', `<html ${attrs} `);
         res.writeHead(200, { ...SECURITY_HEADERS, 'Content-Type': FILES['/'][1] });
         return res.end(html);
       }
@@ -121,6 +122,10 @@ export async function startServer(chart, { log }) {
       }
       if (url.pathname === '/api/theme') {
         await saveTheme(body.theme);
+        return sendJson(res, 200, { ok: true });
+      }
+      if (url.pathname === '/api/view') {
+        await saveView(body);
         return sendJson(res, 200, { ok: true });
       }
       if (url.pathname === '/api/locale') {

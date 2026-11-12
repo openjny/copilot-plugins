@@ -168,6 +168,7 @@ export default {
 
   'tb.aria': 'Task tools',
   'tb.list': 'Show / hide the name, duration and assignee columns (# is always shown)',
+  'tb.labels': 'Show / hide the task names on the chart',
   'tb.undo': 'Undo (Ctrl+Z)',
   'tb.undoWith': 'Undo: {label} (Ctrl+Z)',
   'tb.redo': 'Redo (Ctrl+Y)',
