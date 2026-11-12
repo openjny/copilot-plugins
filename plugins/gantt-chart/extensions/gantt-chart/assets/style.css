@@ -153,11 +153,11 @@ button, input, select, textarea { font: inherit; color: inherit; }
 .picked { margin: 0; padding: 0 12px 12px 30px; font-size: 12px; color: var(--fg); columns: 3 220px; }
 
 /* Bars */
-.bar { position: absolute; height: 18px; border-radius: 3px; background: var(--bar); cursor: grab; touch-action: none; z-index: 2; }
+.bar { position: absolute; height: var(--bar-h, 18px); border-radius: 3px; background: var(--bar); cursor: grab; touch-action: none; z-index: 2; }
 .bar .fill { position: absolute; inset: 0 auto 0 0; background: var(--fill); border-radius: 3px 0 0 3px; }
-.bar .pct { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; font-size: 11px; pointer-events: none; text-shadow: 0 0 3px var(--bg); }
+.bar .pct { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; font-size: var(--bar-fs, 11px); pointer-events: none; text-shadow: 0 0 3px var(--bg); }
 /* Without the task list the bar carries the task name */
-.bar .pct.named { display: block; padding: 0 8px; line-height: 18px; text-align: left; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.bar .pct.named { display: block; padding: 0 8px; line-height: var(--bar-h, 18px); text-align: left; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .bar .grip { position: absolute; top: 0; right: 0; bottom: 0; width: 7px; cursor: ew-resize; border-radius: 0 3px 3px 0; }
 .bar .grip:hover { background: rgba(0, 0, 0, 0.18); }
 .bar.sel { outline: 2px solid var(--accent); }
@@ -183,7 +183,7 @@ button, input, select, textarea { font: inherit; color: inherit; }
 /* Without the task list a parent task is named above its bar */
 .sum-label { position: absolute; height: 14px; line-height: 14px; padding-left: 2px; font-size: 11px; font-weight: 600; color: var(--fg); white-space: nowrap; pointer-events: none; z-index: 3; }
 /* The label sits right of the bar, clear of the link that leaves the bar end, and above the links so they do not run through the text */
-.after-label { position: absolute; height: 18px; display: flex; align-items: center; margin-left: 10px; padding: 0 4px; border-radius: 3px; background: color-mix(in srgb, var(--bg) 88%, transparent); font-size: 11px; color: var(--muted); white-space: nowrap; pointer-events: none; z-index: 3; }
+.after-label { position: absolute; height: var(--bar-h, 18px); display: flex; align-items: center; margin-left: 10px; padding: 0 4px; border-radius: 3px; background: color-mix(in srgb, var(--bg) 88%, transparent); font-size: var(--bar-fs, 11px); color: var(--muted); white-space: nowrap; pointer-events: none; z-index: 3; }
 .links { position: absolute; inset: 0; pointer-events: none; color: var(--muted); z-index: 2; }
 .links path.link { fill: none; stroke: currentColor; stroke-width: 1.2; }
 .links path.hit { fill: none; stroke: transparent; stroke-width: 12; pointer-events: stroke; cursor: pointer; }

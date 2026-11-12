@@ -1,10 +1,20 @@
 import { COLORS, FIRST_DAY, dayOfWeek, formatDate, formatDuration, isSummary, makeCalendar, maxSlideEarlier, mondayOnOrBefore, parseDate, parseDuration, schedule, subtreeEnd, todayDay, ymd } from '/model.mjs';
 
-const ROW_H = 28;
+// Row height and pixels per day change with Ctrl+scroll, so they are variables; the ROW_STD / PPD values are the
+// "standard" scale that the day / week / month buttons reset to.
+const ROW_STD = 28;
+const ROW_MIN = 22;
+const ROW_MAX = 48;
+let ROW_H = ROW_STD;
+let BAR_H = ROW_STD - 10;
 const LINK_LEG = 14;
 const HEAD_H = 56;
 const PPD = { day: 48, week: 18, month: 5 };
+const PPD_MIN = 1.5;
+const PPD_MAX = 120;
 const MIN_DAYS = { day: 35, week: 140, month: 365 };
+/** The unit that reads best at this scale: columns stay wide enough for their labels (the standard scales sit in the middle of each band). */
+const unitFor = (ppd) => (ppd >= 30 ? 'day' : ppd >= 9.5 ? 'week' : 'month');
 // The timeline never starts before the first Monday of 1970 or ends after 2200 (the range of dates the model accepts).
 const MIN_START = FIRST_DAY;
 const MAX_END = parseDate('2200-12-31');
@@ -53,6 +63,7 @@ const app = {
   link: null,
   marquee: null,
   zoom: 'day',
+  ppd: PPD.day,
   listOpen: false,
   detailOpen: false,
   editing: null,
@@ -338,9 +349,9 @@ function renderTop() {
           {
             class: 'btn',
             type: 'button',
-            title: `${label}表示（Ctrl+↑ / Ctrl+↓ で日・週・月を切り替え）`,
+            title: `${label}表示（標準の拡大率に戻します。Ctrl+スクロールで拡大・縮小すると、日・週・月は自動で切り替わります）`,
             'aria-pressed': String(app.zoom === zoom),
-            onclick: () => setZoom(zoom),
+            onclick: () => setScale(PPD[zoom], ROW_STD),
           },
           label,
         ),
@@ -360,20 +371,70 @@ function renderTop() {
   setSaving(app.saving);
 }
 
-const ZOOMS = Object.keys(ZOOM_NAME);
+const clamp = (value, low, high) => Math.min(Math.max(value, low), high);
 
-function setZoom(zoom) {
-  if (zoom === app.zoom) return;
-  const viewport = ui.scroller.clientWidth - listW();
-  const center = app.range ? app.range.start + (ui.scroller.scrollLeft + viewport / 2) / app.range.ppd : null;
-  app.zoom = zoom;
-  // Start the new range around the date at the center of the view, then put that date back in the middle.
-  const margin = marginDays(PPD[zoom]);
-  app.view = center === null ? null : { start: Math.floor(center) - margin, end: Math.ceil(center) + margin };
-  renderTop();
+/**
+ * Sets the scale (pixels per day, row height) and picks the day / week / month unit that suits it. The date and the
+ * row under `anchor` (a point on the screen; the center of the view when omitted) stay where they are.
+ */
+function setScale(ppd, rowHeight, anchor = null) {
+  const nextPpd = clamp(ppd, PPD_MIN, PPD_MAX);
+  const nextRow = Math.round(clamp(rowHeight, ROW_MIN, ROW_MAX));
+  if (nextPpd === app.ppd && nextRow === ROW_H) return;
+  const sc = ui.scroller;
+  const rect = sc.getBoundingClientRect();
+  const px = anchor ? clamp(anchor.x - rect.left, listW(), sc.clientWidth) : listW() + (sc.clientWidth - listW()) / 2;
+  const py = anchor ? clamp(anchor.y - rect.top, HEAD_H, sc.clientHeight) : HEAD_H + (sc.clientHeight - HEAD_H) / 2;
+  const old = app.range;
+  const day = old ? old.start + (sc.scrollLeft + px - listW()) / old.ppd : null;
+  const rowAt = (sc.scrollTop + py - HEAD_H) / ROW_H;
+  const unit = unitFor(nextPpd);
+  const unitChanged = unit !== app.zoom;
+  app.ppd = nextPpd;
+  app.zoom = unit;
+  ROW_H = nextRow;
+  BAR_H = nextRow - 10;
+  // Start the new range around the anchor date (the tasks and today are added to it), then put that date back under the pointer.
+  if (day !== null) {
+    const margin = marginDays(nextPpd);
+    app.view = { start: Math.floor(day) - margin, end: Math.ceil(day) + margin };
+  }
+  if (unitChanged) renderTop();
   renderChart();
-  if (center !== null) ui.scroller.scrollLeft = Math.max(0, (center - app.range.start) * app.range.ppd - viewport / 2);
+  if (day !== null) sc.scrollLeft = Math.max(0, (day - app.range.start) * app.range.ppd + listW() - px);
+  sc.scrollTop = Math.max(0, rowAt * ROW_H + HEAD_H - py);
 }
+
+const zoomBy = (factor, anchor) => setScale(app.ppd * factor, ROW_H * factor, anchor);
+
+// Ctrl+scroll (and a trackpad pinch, which arrives as Ctrl+scroll) zooms both axes at once. Events are folded into one
+// update per frame, and the browser's own page zoom is held back.
+let wheelZoom = null;
+document.addEventListener(
+  'wheel',
+  (event) => {
+    if (!event.ctrlKey || ui.editor.hidden || document.querySelector('dialog[open]')) return;
+    event.preventDefault();
+    const delta = event.deltaMode === 1 ? event.deltaY * 16 : event.deltaY;
+    // A mouse wheel moves in steps of about 100; a pinch sends many small values.
+    const factor = Math.exp(-delta * (Math.abs(delta) < 50 ? 0.01 : 0.002));
+    const rect = ui.scroller.getBoundingClientRect();
+    const inside = event.clientX >= rect.left && event.clientX <= rect.right && event.clientY >= rect.top && event.clientY <= rect.bottom;
+    const anchor = inside ? { x: event.clientX, y: event.clientY } : null;
+    if (wheelZoom) {
+      wheelZoom.factor *= factor;
+      wheelZoom.anchor = anchor;
+      return;
+    }
+    wheelZoom = { factor, anchor };
+    requestAnimationFrame(() => {
+      const { factor: total, anchor: at } = wheelZoom;
+      wheelZoom = null;
+      zoomBy(total, at);
+    });
+  },
+  { passive: false },
+);
 
 function renderBanner() {
   const error = app.state.error;
@@ -504,7 +565,7 @@ function marginDays(ppd) {
  * while tasks are moved. It is reset when the file or the zoom changes.
  */
 function computeRange(rows) {
-  const ppd = PPD[app.zoom];
+  const ppd = app.ppd;
   const today = todayDay();
   const margin = marginDays(ppd);
   // Today is always inside the range, so the chart can open on it and "today" has somewhere to go back to.
@@ -554,6 +615,9 @@ function renderChart() {
   const prev = app.range;
   const fresh = app.view === null;
   app.range = computeRange(rows);
+  ui.grid.style.setProperty('--row-h', `${ROW_H}px`);
+  ui.grid.style.setProperty('--bar-h', `${BAR_H}px`);
+  ui.grid.style.setProperty('--bar-fs', `${clamp(Math.round(BAR_H * 0.6), 10, 14)}px`);
   ui.grid.style.setProperty('--leftW', `${listW()}px`);
   ui.grid.style.setProperty('--cols', app.listOpen ? `${COLS.no.width}px 1fr ${COLS.dur.width}px ${COLS.res.width}px` : `${COLS.no.width}px`);
   ui.grid.style.setProperty('--tlW', `${app.range.width}px`);
@@ -641,7 +705,8 @@ function renderTimelineHeader() {
       const b = ymd(monday + 6);
       cell(top, monday, monday + 6, `${a.y}年${a.m}月${a.d}日 – ${a.y === b.y ? '' : `${b.y}年`}${b.m}月${b.d}日`, 'grp');
     }
-    for (let day = start; day <= end; day++) cell(bottom, day, day, `${ymd(day).d} (${WEEKDAY[dayOfWeek(day)]})`, app.cal.isWorkday(day) ? '' : 'off', formatDate(day));
+    // Below 40px a day column has no room for the weekday.
+    for (let day = start; day <= end; day++) cell(bottom, day, day, ppd >= 40 ? `${ymd(day).d} (${WEEKDAY[dayOfWeek(day)]})` : String(ymd(day).d), app.cal.isWorkday(day) ? '' : 'off', formatDate(day));
   } else if (app.zoom === 'week') {
     for (const seg of monthSegments(start, end)) cell(top, seg.from, seg.to, `${seg.y}年${seg.m}月`, 'grp');
     for (let monday = start; monday <= end; monday += 7) cell(bottom, monday, monday + 6, `${ymd(monday).m}/${ymd(monday).d}`, '', formatDate(monday));
@@ -770,10 +835,12 @@ function renderBody() {
     const label = `${task.name}: ${formatDate(row.startDay)} – ${formatDate(row.endDay)}（${formatDuration(row.duration)}）進捗 ${percent}%`;
     const selected = app.picked.has(row.id);
     if (row.summary) {
-      const sbar = h('div', { class: `sbar c-${colorOf(row)}${selected ? ' sel' : ''}`, 'data-id': row.id, role: 'img', 'aria-label': label, title: label, style: { left: `${left}px`, width: `${width}px`, top: `${top + (named ? 14 : 8)}px` } });
+      // These offsets are drawn for the standard row height; a taller or shorter row shifts them by half the difference.
+      const shift = Math.round((ROW_H - ROW_STD) / 2);
+      const sbar = h('div', { class: `sbar c-${colorOf(row)}${selected ? ' sel' : ''}`, 'data-id': row.id, role: 'img', 'aria-label': label, title: label, style: { left: `${left}px`, width: `${width}px`, top: `${top + (named ? 14 : 8) + shift}px` } });
       wireBar(sbar, row);
       parts.push(sbar);
-      if (named) parts.push(h('div', { class: 'sum-label', style: { left: `${left}px`, top: `${top + 1}px` } }, `${task.name}  ${percent}%`));
+      if (named) parts.push(h('div', { class: 'sum-label', style: { left: `${left}px`, top: `${top + 1 + shift}px` } }, `${task.name}  ${percent}%`));
       else parts.push(h('div', { class: 'after-label', style: { left: `${left + width}px`, top: `${top + 5}px` } }, `${percent}%`));
       continue;
     }
@@ -1259,7 +1326,7 @@ function moveMarquee(marquee, event) {
   Object.assign(marquee.el.style, { left: `${left}px`, top: `${top}px`, width: `${right - left}px`, height: `${bottom - top}px` });
   const { start, ppd } = app.range;
   const hits = app.visible
-    .filter((row, i) => i * ROW_H + 5 < bottom && i * ROW_H + 5 + 18 > top && (row.startDay - start) * ppd < right && (row.endDay + 1 - start) * ppd > left)
+    .filter((row, i) => i * ROW_H + 5 < bottom && i * ROW_H + 5 + BAR_H > top && (row.startDay - start) * ppd < right && (row.endDay + 1 - start) * ppd > left)
     .map((row) => row.id);
   const ids = [...new Set([...marquee.base, ...hits])];
   pick(ids, hits[0] ?? [...marquee.base].pop() ?? null, { notify: false });
@@ -1792,12 +1859,11 @@ document.addEventListener('keydown', (event) => {
     deleteLink();
     return;
   }
-  // Ctrl+Up zooms in (day), Ctrl+Down zooms out (month).
+  // Ctrl+Up / Ctrl+Down zoom in / out by a step, for the keyboard (Ctrl+scroll does the same with the pointer as the center).
   if (!event.ctrlKey || event.altKey || event.shiftKey || event.metaKey || isTyping(event.target)) return;
   if (event.key !== 'ArrowUp' && event.key !== 'ArrowDown') return;
   event.preventDefault();
-  const next = ZOOMS[Math.max(0, Math.min(ZOOMS.indexOf(app.zoom) + (event.key === 'ArrowDown' ? 1 : -1), ZOOMS.length - 1))];
-  setZoom(next);
+  zoomBy(event.key === 'ArrowUp' ? 1.25 : 0.8, null);
 });
 
 let resizeTimer;
