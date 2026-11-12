@@ -5,6 +5,9 @@ const LINK_LEG = 14;
 const HEAD_H = 56;
 const PPD = { day: 48, week: 18, month: 5 };
 const MIN_DAYS = { day: 35, week: 140, month: 365 };
+// The timeline never starts before the first Monday of 1970 or ends after 2200 (the range of dates the model accepts).
+const MIN_START = 4;
+const MAX_END = parseDate('2200-12-31');
 const WEEKDAY = ['日', '月', '火', '水', '木', '金', '土'];
 const COLOR_NAME = { none: 'なし', green: '緑', orange: 'オレンジ', red: '赤', purple: '紫', teal: '青緑', gray: 'グレー' };
 const ZOOM_NAME = { day: '日', week: '週', month: '月' };
@@ -39,6 +42,9 @@ const app = {
   sched: null,
   visible: [],
   range: null,
+  view: null,
+  viewPath: null,
+  autoScrolling: false,
   selected: null,
   zoom: 'day',
   panelOpen: window.innerWidth >= 1000,
@@ -304,10 +310,12 @@ function renderTop() {
               const viewport = ui.scroller.clientWidth - app.leftW;
               const center = app.range ? app.range.start + (ui.scroller.scrollLeft + viewport / 2) / app.range.ppd : null;
               app.zoom = zoom;
+              // Start the new range around the date at the center of the view, then put that date back in the middle.
+              const margin = marginDays(PPD[zoom]);
+              app.view = center === null ? null : { start: Math.floor(center) - margin, end: Math.ceil(center) + margin };
               renderTop();
               renderChart();
-              // Keep the date at the center of the view where it was.
-              ui.scroller.scrollLeft = center === null ? 0 : Math.max(0, (center - app.range.start) * app.range.ppd - viewport / 2);
+              if (center !== null) ui.scroller.scrollLeft = Math.max(0, (center - app.range.start) * app.range.ppd - viewport / 2);
             },
           },
           label,
@@ -466,16 +474,28 @@ async function operate(op, extra = {}) {
 
 // Timeline geometry
 
+/** Days of room kept on each side of the tasks (at least a screen), so that the chart scrolls past the first and last task and bars can be dragged there. */
+function marginDays(ppd) {
+  const viewport = Math.ceil((ui.scroller.clientWidth - app.leftW) / ppd);
+  return Math.ceil(Math.max(viewport, 28) / 7) * 7;
+}
+
+/**
+ * The range only grows (app.view remembers it), so the date a screen position stands for does not change
+ * while tasks are moved. It is reset when the file or the zoom changes.
+ */
 function computeRange(rows) {
   const ppd = PPD[app.zoom];
   const today = todayDay();
+  const margin = marginDays(ppd);
   const first = rows.length ? Math.min(...rows.map((row) => row.startDay)) : today;
   const last = rows.length ? Math.max(...rows.map((row) => row.endDay)) : today;
-  const start = mondayOnOrBefore(first);
-  const viewport = Math.ceil((ui.scroller.clientWidth - app.leftW) / ppd);
-  const span = Math.max(last + 21 - start + 1, MIN_DAYS[app.zoom], viewport + 7);
-  const days = Math.ceil(span / 7) * 7;
-  return { start, days, end: start + days - 1, ppd, width: days * ppd, today };
+  const view = app.view ?? { start: Infinity, end: -Infinity };
+  const start = Math.max(MIN_START, mondayOnOrBefore(Math.min(view.start, first - margin)));
+  const end = Math.min(MAX_END, Math.max(view.end, last + margin, start + MIN_DAYS[app.zoom] - 1));
+  const days = Math.ceil((end - start + 1) / 7) * 7;
+  app.view = { start, end: start + days - 1 };
+  return { start, days, end: start + days - 1, ppd, width: days * ppd, today, first };
 }
 
 const monthStart = (y, m) => parseDate(`${y + Math.floor((m - 1) / 12)}-${String(((m - 1) % 12) + 1).padStart(2, '0')}-01`);
@@ -495,6 +515,12 @@ function renderChart() {
   if (!app.sched) return;
   const rows = app.sched.rows;
   app.visible = rows.filter((row) => !row.hidden);
+  if (app.viewPath !== app.state.file.path) {
+    app.view = null;
+    app.viewPath = app.state.file.path;
+  }
+  const prev = app.range;
+  const fresh = app.view === null;
   app.range = computeRange(rows);
   const bodyMin = Math.max(app.visible.length * ROW_H, ui.scroller.clientHeight - HEAD_H);
   ui.grid.style.setProperty('--leftW', `${app.leftW}px`);
@@ -505,6 +531,38 @@ function renderChart() {
   renderTimelineHeader();
   renderLeft();
   renderBody();
+  const { start, ppd, first } = app.range;
+  // The range grew to the left: shift the scroll position so the days in view stay where they were.
+  if (prev && prev.ppd === ppd && prev.start !== start) ui.scroller.scrollLeft += (prev.start - start) * ppd;
+  // A file just opened: show its first task rather than the empty margin before it.
+  if (fresh) ui.scroller.scrollLeft = Math.max(0, (first - start - 7) * ppd);
+}
+
+let scrollFrame = 0;
+ui.scroller.addEventListener(
+  'scroll',
+  () => {
+    if (scrollFrame) return;
+    scrollFrame = requestAnimationFrame(() => {
+      scrollFrame = 0;
+      growRange();
+    });
+  },
+  { passive: true },
+);
+
+/** Extends the timeline when the view reaches one of its ends, so it can be scrolled as far as the dates go. */
+function growRange() {
+  const range = app.range;
+  if (!range || !app.sched || app.drag || ui.editor.hidden) return;
+  const sc = ui.scroller;
+  const edge = 14 * range.ppd;
+  const left = sc.scrollLeft < edge && range.start > MIN_START;
+  const right = sc.scrollWidth - sc.clientWidth - sc.scrollLeft < edge && range.end < MAX_END;
+  if (!left && !right) return;
+  const margin = marginDays(range.ppd);
+  app.view = { start: range.start - (left ? margin : 0), end: range.end + (right ? margin : 0) };
+  renderChart();
 }
 
 function renderLeftHeader() {
@@ -818,7 +876,18 @@ function beginDrag(event, row, bar) {
   const preds = taskById(row.id).predecessors;
   // The first day the predecessors allow; a bar cannot be dragged before it.
   const earliest = preds.length ? Math.max(...preds.map((pred) => app.cal.add(rowById(pred.task).endDay, 1))) : -Infinity;
-  app.drag = { row, bar, mode: event.target.classList.contains('grip') ? 'resize' : 'move', x0: event.clientX, delta: 0, width: bar.offsetWidth, earliest };
+  app.drag = {
+    row,
+    bar,
+    mode: event.target.classList.contains('grip') ? 'resize' : 'move',
+    x0: event.clientX,
+    scroll0: ui.scroller.scrollLeft,
+    cx: event.clientX,
+    cy: event.clientY,
+    delta: 0,
+    width: bar.offsetWidth,
+    earliest,
+  };
 }
 
 function dragTarget(drag) {
@@ -831,18 +900,52 @@ function dragTarget(drag) {
   return { start: row.startDay, end: Math.max(end, row.startDay) };
 }
 
-function onDragMove(event) {
-  const drag = app.drag;
-  if (!drag) return;
+// The bar lives in the scrolled content, so the distance moved includes how far the view has scrolled since the drag began.
+function updateDrag(drag) {
   const ppd = app.range.ppd;
-  drag.delta = Math.round((event.clientX - drag.x0) / ppd);
+  drag.delta = Math.round((drag.cx - drag.x0 + ui.scroller.scrollLeft - drag.scroll0) / ppd);
   if (drag.mode === 'move') drag.bar.style.transform = `translateX(${Math.max(drag.delta, drag.earliest - drag.row.startDay) * ppd}px)`;
   else drag.bar.style.width = `${Math.max(ppd, drag.width + drag.delta * ppd)}px`;
   const target = dragTarget(drag);
   ui.tip.hidden = false;
   ui.tip.textContent = `${formatDate(target.start)} – ${formatDate(target.end)}（${formatDuration(app.cal.count(target.start, target.end))}）${target.limited ? ' 先行タスクの終了後が下限' : ''}`;
-  ui.tip.style.left = `${event.clientX + 14}px`;
-  ui.tip.style.top = `${event.clientY + 16}px`;
+  ui.tip.style.left = `${drag.cx + 14}px`;
+  ui.tip.style.top = `${drag.cy + 16}px`;
+}
+
+function onDragMove(event) {
+  const drag = app.drag;
+  if (!drag) return;
+  drag.cx = event.clientX;
+  drag.cy = event.clientY;
+  updateDrag(drag);
+  autoScroll();
+}
+
+const AUTO_SCROLL_ZONE = 48;
+const AUTO_SCROLL_SPEED = 24;
+
+// Scrolls the timeline while the pointer is held near its left or right edge during a drag.
+function autoScroll() {
+  if (app.autoScrolling) return;
+  app.autoScrolling = true;
+  const step = () => {
+    const drag = app.drag;
+    const sc = ui.scroller;
+    const rect = sc.getBoundingClientRect();
+    const left = rect.left + app.leftW + AUTO_SCROLL_ZONE;
+    const right = rect.left + sc.clientWidth - AUTO_SCROLL_ZONE;
+    const speed = !drag ? 0 : drag.cx < left ? -Math.min(1, (left - drag.cx) / AUTO_SCROLL_ZONE) : drag.cx > right ? Math.min(1, (drag.cx - right) / AUTO_SCROLL_ZONE) : 0;
+    if (!speed) {
+      app.autoScrolling = false;
+      return;
+    }
+    const before = sc.scrollLeft;
+    sc.scrollLeft += speed * AUTO_SCROLL_SPEED;
+    if (sc.scrollLeft !== before) updateDrag(drag);
+    requestAnimationFrame(step);
+  };
+  requestAnimationFrame(step);
 }
 
 async function endDrag(event) {
@@ -863,6 +966,7 @@ async function endDrag(event) {
     app.pendingRender = false;
     render();
   }
+  growRange();
 }
 
 // ---- Detail panel -----------------------------------------------------------------------------------------------
