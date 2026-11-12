@@ -15,17 +15,18 @@
     <div id="banner" class="banner" role="alert" hidden></div>
     <div class="main">
       <div id="scroller" class="scroller">
-        <div id="grid" class="grid">
-          <div id="hl" class="hl"></div>
+        <div id="grid" class="grid nolist">
+          <div id="hl" class="hl" hidden></div>
           <div id="ht" class="ht"></div>
-          <div id="bl" class="bl" role="treegrid" aria-label="タスク一覧" tabindex="0"></div>
+          <div id="bl" class="bl" role="treegrid" aria-label="タスク一覧" tabindex="0" hidden></div>
           <div id="bt" class="bt"></div>
         </div>
       </div>
-      <aside id="panel" class="panel" aria-label="詳細"></aside>
     </div>
+    <aside id="panel" class="panel" aria-label="タスクの詳細" hidden></aside>
     <footer id="status" class="status" role="status"></footer>
   </div>
+  <dialog id="project" class="dlg" aria-labelledby="project-title"></dialog>
   <dialog id="versions" class="dlg" aria-labelledby="versions-title"></dialog>
   <dialog id="confirm" class="dlg" aria-labelledby="confirm-text"></dialog>
   <div id="toast" class="toast" role="status" aria-live="polite"></div>

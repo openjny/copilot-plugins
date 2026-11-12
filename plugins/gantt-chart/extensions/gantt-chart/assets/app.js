@@ -21,20 +21,21 @@ const ICONS = {
   outdent: 'M4 6h16M12 10h8M12 14h8M4 18h16M8 9l-4 3 4 3',
   up: 'M12 19V5M6 11l6-6 6 6',
   down: 'M12 5v14M6 13l6 6 6-6',
-  panel: 'M4 5h16v14H4zM14 5v14',
+  sidebar: 'M4 5h16v14H4zM9 5v14',
+  sliders: 'M4 6h10M18 6h2M16 4v4M4 12h2M10 12h10M8 10v4M4 18h9M17 18h3M15 16v4',
   history: 'M4 12a8 8 0 1 0 3-6.2M4 4v4h4M12 8v4l3 2',
   download: 'M12 4v11M7 10l5 5 5-5M5 20h14',
   sun: 'M12 8a4 4 0 1 0 0 8 4 4 0 0 0 0-8zM12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4',
   moon: 'M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z',
   monitor: 'M3 5h18v11H3zM8 20h8M12 16v4',
-  columns: 'M4 5h16v14H4zM9 5v14M15 5v14',
 };
-// Columns of the task list besides the always visible name, in display order.
+// Columns of the task list besides the name, in display order.
 const COLS = {
-  no: { label: '#', title: '番号', width: 36, align: 'right' },
-  dur: { label: '期間', title: '期間', width: 56, align: 'right' },
-  res: { label: '担当', title: '担当', width: 88 },
+  no: { label: '#', width: 36, align: 'right' },
+  dur: { label: '期間', width: 56, align: 'right' },
+  res: { label: '担当', width: 88 },
 };
+const COLS_WIDTH = Object.values(COLS).reduce((sum, col) => sum + col.width, 0);
 
 const app = {
   state: null,
@@ -47,8 +48,8 @@ const app = {
   autoScrolling: false,
   selected: null,
   zoom: 'day',
-  panelOpen: window.innerWidth >= 1000,
-  tab: 'task',
+  listOpen: false,
+  detailOpen: false,
   editing: null,
   editText: '',
   drag: null,
@@ -57,12 +58,13 @@ const app = {
   leftW: Math.max(240, Math.min(360, Math.round(window.innerWidth * 0.4))),
   panelKey: '',
   startKey: null,
-  cols: { no: true, dur: true, res: true },
   theme: document.documentElement.dataset.theme in THEME_NAME ? document.documentElement.dataset.theme : 'auto',
 };
 
 const $ = (id) => document.getElementById(id);
-const ui = Object.fromEntries(['start', 'editor', 'topbar', 'toolbar', 'banner', 'scroller', 'grid', 'hl', 'ht', 'bl', 'bt', 'panel', 'status', 'versions', 'confirm', 'toast', 'tip'].map((id) => [id, $(id)]));
+const ui = Object.fromEntries(['start', 'editor', 'topbar', 'toolbar', 'banner', 'scroller', 'grid', 'hl', 'ht', 'bl', 'bt', 'panel', 'status', 'project', 'versions', 'confirm', 'toast', 'tip'].map((id) => [id, $(id)]));
+// Width of the task list in the scroller; the list is not shown by default.
+const listW = () => (app.listOpen ? app.leftW : 0);
 
 // ---- DOM helpers --------------------------------------------------------------------------------------------
 
@@ -142,8 +144,11 @@ async function post(path, body) {
   return data;
 }
 
-/** Sends edit operations; the server saves them and answers with the new state. */
-async function send(ops) {
+/**
+ * Sends edit operations; the server saves them and answers with the new state.
+ * An error goes to onError when given (a modal dialog covers the toast), otherwise to the toast.
+ */
+async function send(ops, onError) {
   setSaving('saving');
   try {
     const data = await post('/api/ops', { ops });
@@ -158,7 +163,8 @@ async function send(ops) {
     return data.results;
   } catch (error) {
     setSaving('error');
-    toast(error.message, 'error');
+    if (onError) onError(error.message);
+    else toast(error.message, 'error');
     app.panelKey = '';
     renderPanel();
     if (app.sched) renderChart();
@@ -307,7 +313,7 @@ function renderTop() {
             type: 'button',
             'aria-pressed': String(app.zoom === zoom),
             onclick: () => {
-              const viewport = ui.scroller.clientWidth - app.leftW;
+              const viewport = ui.scroller.clientWidth - listW();
               const center = app.range ? app.range.start + (ui.scroller.scrollLeft + viewport / 2) / app.range.ppd : null;
               app.zoom = zoom;
               // Start the new range around the date at the center of the view, then put that date back in the middle.
@@ -329,26 +335,10 @@ function renderTop() {
         h('button', { class: 'btn square', type: 'button', title: label, 'aria-label': label, 'aria-pressed': String(app.theme === theme), onclick: () => setTheme(theme) }, icon(THEME_ICON[theme])),
       ),
     ),
+    h('button', { class: 'btn tbtn', type: 'button', title: 'プロジェクト設定（名前・休日）', 'aria-label': 'プロジェクト設定', onclick: openProject }, icon('sliders'), h('span', { class: 'label' }, 'プロジェクト')),
     h('button', { class: 'btn tbtn', type: 'button', title: 'バージョン', 'aria-label': 'バージョン', onclick: openVersions }, icon('history'), h('span', { class: 'label' }, 'バージョン')),
     h('a', { class: 'btn tbtn', href: '/api/export', download: file.name, target: '_blank', title: 'JSON エクスポート', 'aria-label': 'JSON エクスポート' }, icon('download'), h('span', { class: 'label' }, 'JSON エクスポート')),
-    h(
-      'button',
-      {
-        class: 'btn square',
-        type: 'button',
-        'aria-label': '詳細パネル',
-        'aria-pressed': String(app.panelOpen),
-        onclick: () => {
-          app.panelOpen = !app.panelOpen;
-          ui.panel.hidden = !app.panelOpen;
-          renderTop();
-          renderChart();
-        },
-      },
-      icon('panel'),
-    ),
   );
-  ui.panel.hidden = !app.panelOpen;
   setSaving(app.saving);
 }
 
@@ -374,6 +364,19 @@ function buildToolbar() {
     ...COLORS.map((color) => h('option', { value: color }, COLOR_NAME[color])),
   );
   ui.toolbar.replaceChildren(
+    h(
+      'button',
+      {
+        id: 'tb-list',
+        class: 'btn square',
+        type: 'button',
+        title: 'タスク一覧の表示 / 非表示',
+        'aria-label': 'タスク一覧の表示 / 非表示',
+        onclick: toggleList,
+      },
+      icon('sidebar'),
+    ),
+    h('span', { class: 'sep' }),
     button('tb-add', 'plus', 'タスクを追加', onAdd),
     button('tb-del', 'trash', 'タスクを削除', onDelete),
     h('span', { class: 'sep' }),
@@ -383,37 +386,15 @@ function buildToolbar() {
     button('tb-down', 'down', '下へ移動', () => operate('shift', { direction: 'down' })),
     h('span', { class: 'sep' }),
     colorSelect,
-    h('span', { class: 'spacer' }),
-    h(
-      'button',
-      {
-        id: 'tb-cols-min',
-        class: 'btn square',
-        type: 'button',
-        title: '名前だけ表示（もう一度押すとすべて表示）',
-        'aria-label': '名前だけ表示',
-        onclick: () => setColumns(Object.fromEntries(Object.keys(COLS).map((key) => [key, shownCols().length === 0]))),
-      },
-      icon('columns'),
-    ),
-    h(
-      'div',
-      { class: 'seg', role: 'group', 'aria-label': '一覧に表示する列' },
-      ...Object.entries(COLS).map(([key, col]) => h('button', { id: `tb-col-${key}`, class: 'btn', type: 'button', title: `${col.title}の列を表示`, onclick: () => setColumns({ ...app.cols, [key]: !app.cols[key] }) }, col.label)),
-    ),
   );
 }
 
-const shownCols = () => Object.keys(COLS).filter((key) => app.cols[key]);
-const colsWidth = () => shownCols().reduce((sum, key) => sum + COLS[key].width, 0);
-const colsTemplate = () => [app.cols.no && `${COLS.no.width}px`, '1fr', app.cols.dur && `${COLS.dur.width}px`, app.cols.res && `${COLS.res.width}px`].filter(Boolean).join(' ');
-const clampLeftWidth = (width) => Math.max(Math.max(120, colsWidth() + 40), Math.min(width, 720, ui.scroller.clientWidth - 160));
+const clampLeftWidth = (width) => Math.max(COLS_WIDTH + 40, Math.min(width, 720, ui.scroller.clientWidth - 160));
 
-// Hiding a column narrows the list by that column's width (showing one widens it), so the name column keeps its width.
-function setColumns(cols) {
-  const before = colsWidth();
-  app.cols = cols;
-  app.leftW = clampLeftWidth(app.leftW + colsWidth() - before);
+// The list is drawn over the left of the scroller, so the first day in view stays the same either way.
+function toggleList() {
+  app.listOpen = !app.listOpen;
+  if (!app.listOpen) app.editing = null;
   renderToolbar();
   renderChart();
 }
@@ -445,18 +426,21 @@ function renderToolbar() {
   const color = $('tb-color');
   color.disabled = !row;
   color.value = row ? list[i].color : 'none';
-  $('tb-cols-min').setAttribute('aria-pressed', String(shownCols().length === 0));
-  for (const key of Object.keys(COLS)) $(`tb-col-${key}`).setAttribute('aria-pressed', String(app.cols[key]));
+  $('tb-list').setAttribute('aria-pressed', String(app.listOpen));
 }
 
 async function onAdd() {
   const row = selectedRow();
   const results = await send([row ? { op: 'add', after: row.id } : { op: 'add' }]);
   const id = results?.[0]?.id;
-  if (id) {
-    select(id);
-    startEdit(id);
-  }
+  if (!id) return;
+  select(id);
+  if (app.listOpen) return startEdit(id);
+  // Without the list the name is typed in the detail panel.
+  showDetail(id);
+  const input = ui.panel.querySelector('[data-field="name"]');
+  input?.focus();
+  input?.select();
 }
 
 async function onDelete() {
@@ -476,7 +460,7 @@ async function operate(op, extra = {}) {
 
 /** Days of room kept on each side of the tasks (at least a screen), so that the chart scrolls past the first and last task and bars can be dragged there. */
 function marginDays(ppd) {
-  const viewport = Math.ceil((ui.scroller.clientWidth - app.leftW) / ppd);
+  const viewport = Math.ceil((ui.scroller.clientWidth - listW()) / ppd);
   return Math.ceil(Math.max(viewport, 28) / 7) * 7;
 }
 
@@ -511,6 +495,11 @@ function monthSegments(start, end) {
   return segments;
 }
 
+/** Fills the scroller with grid lines even when there are few rows. */
+function updateBodyMin() {
+  ui.grid.style.setProperty('--body-min', `${Math.max(app.visible.length * ROW_H, ui.scroller.clientHeight - HEAD_H)}px`);
+}
+
 function renderChart() {
   if (!app.sched) return;
   const rows = app.sched.rows;
@@ -522,14 +511,20 @@ function renderChart() {
   const prev = app.range;
   const fresh = app.view === null;
   app.range = computeRange(rows);
-  const bodyMin = Math.max(app.visible.length * ROW_H, ui.scroller.clientHeight - HEAD_H);
+  ui.grid.classList.toggle('nolist', !app.listOpen);
+  ui.hl.hidden = !app.listOpen;
+  ui.bl.hidden = !app.listOpen;
   ui.grid.style.setProperty('--leftW', `${app.leftW}px`);
-  ui.grid.style.setProperty('--cols', colsTemplate());
   ui.grid.style.setProperty('--tlW', `${app.range.width}px`);
-  ui.grid.style.setProperty('--body-min', `${bodyMin}px`);
-  renderLeftHeader();
+  updateBodyMin();
   renderTimelineHeader();
-  renderLeft();
+  if (app.listOpen) {
+    renderLeftHeader();
+    renderLeft();
+  } else {
+    ui.hl.replaceChildren();
+    ui.bl.replaceChildren();
+  }
   renderBody();
   const { start, ppd, first } = app.range;
   // The range grew to the left: shift the scroll position so the days in view stay where they were.
@@ -592,8 +587,8 @@ function renderLeftHeader() {
     renderChart();
     ui.hl.querySelector('.splitter')?.focus();
   });
-  const head = (key) => (key === 'name' ? h('div', {}, 'タスク名') : app.cols[key] ? h('div', COLS[key].align ? { style: { textAlign: COLS[key].align } } : {}, COLS[key].label) : null);
-  ui.hl.replaceChildren(h('div', { class: 'cols' }, head('no'), head('name'), head('dur'), head('res')), splitter);
+  const head = (key) => h('div', COLS[key].align ? { style: { textAlign: COLS[key].align } } : {}, COLS[key].label);
+  ui.hl.replaceChildren(h('div', { class: 'cols' }, head('no'), h('div', {}, 'タスク名'), head('dur'), head('res')), splitter);
 }
 
 function renderTimelineHeader() {
@@ -669,10 +664,10 @@ function leftRow(row) {
   const el = h(
     'div',
     { ...attrs, onclick: () => showDetail(row.id), ondblclick: () => startEdit(row.id) },
-    app.cols.no ? h('div', { class: 'c-no', role: 'gridcell' }, String(row.row)) : null,
+    h('div', { class: 'c-no', role: 'gridcell' }, String(row.row)),
     h('div', { class: 'c-name', role: 'gridcell', style: { paddingLeft: `${6 + row.level * 16}px` } }, caret, name),
-    app.cols.dur ? h('div', { class: 'c-dur', role: 'gridcell' }, formatDuration(row.duration)) : null,
-    app.cols.res ? h('div', { class: 'c-res', role: 'gridcell', title: resources }, resources) : null,
+    h('div', { class: 'c-dur', role: 'gridcell' }, formatDuration(row.duration)),
+    h('div', { class: 'c-res', role: 'gridcell', title: resources }, resources),
   );
   return el;
 }
@@ -706,6 +701,7 @@ function finishEdit(commit) {
 
 function renderBody() {
   const { start, days, ppd, today } = app.range;
+  const named = !app.listOpen;
   const parts = [];
   const rowTop = new Map(app.visible.map((row, i) => [row.id, i * ROW_H]));
   app.rowTop = rowTop;
@@ -735,18 +731,18 @@ function renderBody() {
     const label = `${task.name}: ${formatDate(row.startDay)} – ${formatDate(row.endDay)}（${formatDuration(row.duration)}）進捗 ${percent}%`;
     const selected = row.id === app.selected;
     if (row.summary) {
-      parts.push(
-        h('div', { class: `sbar${selected ? ' sel' : ''}`, 'data-id': row.id, role: 'img', 'aria-label': label, title: label, style: { left: `${left}px`, width: `${width}px`, top: `${top + 8}px` } }),
-        h('div', { class: 'after-label', style: { left: `${left + width}px`, top: `${top + 5}px` } }, `${percent}%`),
-      );
+      parts.push(h('div', { class: `sbar${selected ? ' sel' : ''}`, 'data-id': row.id, role: 'img', 'aria-label': label, title: label, style: { left: `${left}px`, width: `${width}px`, top: `${top + (named ? 14 : 8)}px` } }));
+      if (named) parts.push(h('div', { class: 'sum-label', style: { left: `${left}px`, top: `${top + 1}px` } }, `${task.name}  ${percent}%`));
+      else parts.push(h('div', { class: 'after-label', style: { left: `${left + width}px`, top: `${top + 5}px` } }, `${percent}%`));
       continue;
     }
-    const inside = width >= 40 && app.zoom === 'day';
+    // Without the list the name goes inside the bar when it fits, otherwise after it.
+    const inside = named ? width >= 80 : width >= 40 && app.zoom === 'day';
     const bar = h(
       'div',
       { class: `bar c-${task.color}${selected ? ' sel' : ''}`, 'data-id': row.id, role: 'img', 'aria-label': label, title: label, style: { left: `${left}px`, width: `${width}px`, top: `${top + 5}px` } },
       h('div', { class: 'fill', style: { width: `${percent}%` } }),
-      inside ? h('span', { class: 'pct' }, `${percent}%`) : null,
+      inside ? h('span', { class: `pct${named ? ' named' : ''}` }, named ? `${task.name}  ${percent}%` : `${percent}%`) : null,
       h('div', { class: 'grip' }),
     );
     bar.addEventListener('pointerdown', (event) => beginDrag(event, row, bar));
@@ -754,7 +750,7 @@ function renderBody() {
     bar.addEventListener('pointerup', endDrag);
     bar.addEventListener('pointercancel', endDrag);
     parts.push(bar);
-    if (!inside || app.zoom !== 'day') parts.push(h('div', { class: 'after-label', style: { left: `${left + width}px`, top: `${top + 5}px` } }, `${task.name}  ${percent}%`));
+    if (named ? !inside : !inside || app.zoom !== 'day') parts.push(h('div', { class: 'after-label', style: { left: `${left + width}px`, top: `${top + 5}px` } }, `${task.name}  ${percent}%`));
   }
 
   parts.push(linksLayer(rowTop));
@@ -839,15 +835,27 @@ function select(id) {
   post('/api/select', { id }).catch(() => {});
 }
 
-// Clicking a task also brings up its details; selecting with the keyboard leaves the panel as it is.
+// Clicking a task also opens its details; while the panel is open it follows the selection, including keyboard moves.
 function showDetail(id) {
   select(id);
-  app.tab = 'task';
+  app.detailOpen = true;
   renderPanel();
-  if (app.panelOpen) return;
-  app.panelOpen = true;
-  ui.panel.hidden = false;
-  renderTop();
+}
+
+function closeDetail() {
+  app.detailOpen = false;
+  renderPanel();
+}
+
+/** After the panel appears or goes, the scroller changes height: refill the grid lines and keep the selected row in view. */
+function afterPanelToggle() {
+  updateBodyMin();
+  const i = app.visible.findIndex((row) => row.id === app.selected);
+  if (i < 0) return;
+  const sc = ui.scroller;
+  const top = HEAD_H + i * ROW_H;
+  if (top + ROW_H > sc.scrollTop + sc.clientHeight) sc.scrollTop = top + ROW_H - sc.clientHeight;
+  else if (top < sc.scrollTop + HEAD_H) sc.scrollTop = top - HEAD_H;
 }
 
 function renderStatus() {
@@ -933,7 +941,7 @@ function autoScroll() {
     const drag = app.drag;
     const sc = ui.scroller;
     const rect = sc.getBoundingClientRect();
-    const left = rect.left + app.leftW + AUTO_SCROLL_ZONE;
+    const left = rect.left + listW() + AUTO_SCROLL_ZONE;
     const right = rect.left + sc.clientWidth - AUTO_SCROLL_ZONE;
     const speed = !drag ? 0 : drag.cx < left ? -Math.min(1, (left - drag.cx) / AUTO_SCROLL_ZONE) : drag.cx > right ? Math.min(1, (drag.cx - right) / AUTO_SCROLL_ZONE) : 0;
     if (!speed) {
@@ -974,20 +982,36 @@ async function endDrag(event) {
 function renderPanel() {
   if (!app.sched || !app.state.file) return;
   const row = selectedRow();
+  const open = app.detailOpen && Boolean(row);
+  if (open === ui.panel.hidden) {
+    ui.panel.hidden = !open;
+    afterPanelToggle();
+  }
+  if (!open) {
+    app.panelKey = '';
+    return;
+  }
   const brief = tasks().map((task) => [task.id, task.name]);
-  const key = JSON.stringify([app.tab, row ? [taskById(row.id), row.startDay, row.endDay, row.duration, row.progress, row.summary, row.row] : null, brief, app.state.doc.project, app.state.file.path]);
+  const key = JSON.stringify([taskById(row.id), row.startDay, row.endDay, row.duration, row.progress, row.summary, row.row, brief, app.state.file.path]);
   if (key === app.panelKey) return;
   app.panelKey = key;
 
   const active = document.activeElement;
   const field = ui.panel.contains(active) ? active.getAttribute('data-field') : null;
   const caret = field && 'selectionStart' in active ? [active.selectionStart, active.selectionEnd] : null;
+  const scrollTop = ui.panel.querySelector('.pbody')?.scrollTop ?? 0;
 
-  const tab = (id, label) => h('button', { class: 'tab', type: 'button', role: 'tab', 'aria-selected': String(app.tab === id), onclick: () => {
-    app.tab = id;
-    renderPanel();
-  } }, label);
-  ui.panel.replaceChildren(h('div', { class: 'tabs', role: 'tablist' }, tab('task', 'タスク'), tab('project', 'プロジェクト')), app.tab === 'task' ? taskForm(row) : projectForm());
+  const task = taskById(row.id);
+  ui.panel.replaceChildren(
+    h(
+      'div',
+      { class: 'ph' },
+      h('span', { class: 'pt', title: task.name }, `#${row.row}  ${task.name}`),
+      h('button', { class: 'btn flat square', type: 'button', 'aria-label': '詳細を閉じる', title: '閉じる（Esc）', onclick: closeDetail }, '×'),
+    ),
+    h('div', { class: 'pbody' }, taskForm(row)),
+  );
+  ui.panel.querySelector('.pbody').scrollTop = scrollTop;
 
   if (field) {
     const el = ui.panel.querySelector(`[data-field="${field}"]`);
@@ -998,10 +1022,13 @@ function renderPanel() {
   }
 }
 
-const labeled = (text, control) => h('label', {}, text, control);
+ui.panel.addEventListener('keydown', (event) => {
+  if (event.key === 'Escape') closeDetail();
+});
+
+const labeled = (text, control, className) => h('label', className ? { class: className } : {}, text, control);
 
 function taskForm(row) {
-  if (!row) return h('p', { class: 'hint' }, 'タスクを選択すると、ここで詳細を編集できます。');
   const task = taskById(row.id);
   const parent = row.summary;
   const commit = (patch) => send([{ op: 'update', id: task.id, ...patch }]);
@@ -1063,6 +1090,7 @@ function taskForm(row) {
         'data-field': 'name',
         onchange: (event) => (event.target.value.trim() ? commit({ name: event.target.value }) : revert('タスク名は空にできません。')),
       }),
+      'wide',
     ),
     h('div', { class: 'lbl' }, '進捗', h('div', { class: 'range' }, rangeInput, output)),
     labeled(
@@ -1079,7 +1107,7 @@ function taskForm(row) {
     ),
     h(
       'div',
-      { class: 'pair' },
+      { class: 'pair wide' },
       labeled('開始', h('input', { type: 'date', value: formatDate(row.startDay), disabled: parent, 'data-field': 'start', onchange: (event) => (event.target.value ? commit({ start: event.target.value }) : revert('開始日を入力してください。')) })),
       labeled('終了', h('input', { type: 'date', value: formatDate(row.endDay), disabled: parent, 'data-field': 'end', onchange: (event) => (event.target.value ? commit({ end: event.target.value }) : revert('終了日を入力してください。')) })),
     ),
@@ -1093,39 +1121,53 @@ function taskForm(row) {
         onchange: (event) => (parseDuration(event.target.value) !== null ? commit({ duration: event.target.value }) : revert('期間は「3d」「2w」のように入力してください。')),
       }),
     ),
-    parent ? h('p', { class: 'hint' }, '子タスクを持つタスクの日付・進捗・工数は、子タスクから自動で決まります。') : null,
+    parent ? h('p', { class: 'hint wide' }, '子タスクを持つタスクの日付・進捗・工数は、子タスクから自動で決まります。') : null,
     labeled('担当（カンマ区切り）', h('input', { type: 'text', value: task.resources.join(', '), 'data-field': 'resources', onchange: (event) => commit({ resources: event.target.value }) })),
     h(
       'div',
-      { class: 'lbl' },
+      { class: 'lbl wide' },
       '色ラベル',
       h('div', { class: 'swatches', role: 'group', 'aria-label': '色ラベル' }, ...COLORS.map((color) => h('button', { class: `swatch c-${color}`, type: 'button', 'aria-pressed': String(task.color === color), onclick: () => commit({ color }) }, h('i'), COLOR_NAME[color]))),
     ),
     parent
       ? null
-      : h('div', { class: 'lbl' }, '先行タスク（終了の翌稼働日 + ラグ）', ...predecessors, h('div', { class: 'pred-add' }, pick, lag, h('button', { class: 'btn', type: 'button', onclick: () => pick.value && commit({ predecessors: [...task.predecessors, { task: pick.value, lag: Math.trunc(Number(lag.value)) || 0 }] }) }, '追加'))),
-    labeled('メモ', h('textarea', { 'data-field': 'note', maxlength: '2000', onchange: (event) => commit({ note: event.target.value }) }, task.note)),
+      : h('div', { class: 'lbl wide' }, '先行タスク（終了の翌稼働日 + ラグ）', ...predecessors, h('div', { class: 'pred-add' }, pick, lag, h('button', { class: 'btn', type: 'button', onclick: () => pick.value && commit({ predecessors: [...task.predecessors, { task: pick.value, lag: Math.trunc(Number(lag.value)) || 0 }] }) }, '追加'))),
+    labeled('メモ', h('textarea', { 'data-field': 'note', maxlength: '2000', onchange: (event) => commit({ note: event.target.value }) }, task.note), 'wide'),
   );
 }
 
-function projectForm() {
+// ---- Project settings -----------------------------------------------------------------------------------------
+
+function openProject() {
   const { project } = app.state.doc;
-  return h(
-    'div',
-    { class: 'form' },
-    labeled('プロジェクト名', h('input', { type: 'text', value: project.name, maxlength: '200', 'data-field': 'project-name', onchange: (event) => send([{ op: 'project', name: event.target.value }]) })),
-    labeled(
-      '休日（1 行に 1 日、YYYY-MM-DD）',
-      h('textarea', {
-        'data-field': 'holidays',
-        spellcheck: 'false',
-        placeholder: '2026-11-23',
-        onchange: (event) => send([{ op: 'project', holidays: event.target.value.split(/[\s,]+/).filter(Boolean) }]),
-      }, project.holidays.join('\n')),
+  const error = h('p', { class: 'err', role: 'alert', hidden: true });
+  const name = h('input', { type: 'text', value: project.name, maxlength: '200', 'aria-label': 'プロジェクト名' });
+  const holidays = h('textarea', { spellcheck: 'false', placeholder: '2026-11-23', 'aria-label': '休日' }, project.holidays.join('\n'));
+  // Shows what was saved (the server trims and sorts), or what is still saved when the edit was refused.
+  const show = () => {
+    const saved = app.state.doc.project;
+    name.value = saved.name;
+    holidays.value = saved.holidays.join('\n');
+  };
+  const save = async (op) => {
+    error.hidden = true;
+    await send([{ op: 'project', ...op }], (message) => {
+      error.textContent = message;
+      error.hidden = false;
+    });
+    show();
+  };
+  name.addEventListener('change', () => save({ name: name.value }));
+  holidays.addEventListener('change', () => save({ holidays: holidays.value.split(/[\s,]+/).filter(Boolean) }));
+  ui.project.replaceChildren(
+    h('div', { class: 'dh' }, h('span', { id: 'project-title' }, 'プロジェクト設定'), h('button', { class: 'btn flat square', type: 'button', 'aria-label': '閉じる', onclick: () => ui.project.close() }, '×')),
+    h(
+      'div',
+      { class: 'db' },
+      h('div', { class: 'form', style: { padding: '0' } }, labeled('プロジェクト名', name), labeled('休日（1 行に 1 日、YYYY-MM-DD）', holidays), error, h('p', { class: 'hint' }, '土曜と日曜は休みです。期間は稼働日（土日と休日を除く日）で数えます。'), h('div', { class: 'lbl' }, 'ファイル', h('span', { class: 'path' }, app.state.file.path))),
     ),
-    h('p', { class: 'hint' }, '土曜と日曜は休みです。期間は稼働日（土日と休日を除く日）で数えます。'),
-    h('div', { class: 'lbl' }, 'ファイル', h('span', { class: 'path' }, app.state.file.path)),
   );
+  if (!ui.project.open) ui.project.showModal();
 }
 
 // ---- Versions -----------------------------------------------------------------------------------------------------
