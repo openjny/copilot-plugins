@@ -2,6 +2,8 @@
 
 ガントチャートを編集できる canvas (`openjny-gantt-chart`) を追加するプラグインです。チャートは 1 つの JSON ファイルに保存されます。ユーザーは画面で、エージェントは action で、同じファイルを編集します。
 
+<img width="1670" height="1059" alt="image" src="https://github.com/user-attachments/assets/98ce66e0-462a-42d2-b4bc-ab1a236fdc89" />
+
 ## 開き方
 
 エージェントに「`plan.gantt.json` でガントチャートを開いて」と頼むか、canvas を開いて画面でパスを入力します。存在しないパスを指定すると、新しいチャートを作ります。拡張子は `.json` にしてください。
