@@ -61,7 +61,7 @@ function chartView(chart, extra = {}) {
 const idProperty = { type: 'string', description: 'Task id, as listed by get_chart (letters, digits, "_" and "-", up to 32 characters).' };
 const taskFields = {
   name: { type: 'string', description: 'Task name. For "project" and "snapshot" it is the project or version name.' },
-  start: { type: 'string', description: 'Start date, YYYY-MM-DD. A weekend or holiday moves to the next working day. For a task with predecessors the start follows them, so this changes their lags.' },
+  start: { type: 'string', description: 'Start date, YYYY-MM-DD. A weekend or holiday moves to the next working day. For a task with predecessors the start follows them, so this changes their lags; a date before the predecessors end is rejected.' },
   end: { type: 'string', description: 'Last day, YYYY-MM-DD; sets the duration. Do not combine with duration.' },
   duration: { type: ['integer', 'string'], description: 'Working days: 3, "3d" or "2w" (a week is 5 working days). Do not combine with end.' },
   progress: { type: 'number', minimum: 0, maximum: 100, description: 'Percent complete. Not for a parent task: it is computed from its children.' },
@@ -73,7 +73,7 @@ const taskFields = {
   predecessors: {
     type: 'array',
     description: 'Replaces the predecessors. The task starts after the latest of them: the next working day after its end, plus lag working days.',
-    items: { type: 'object', properties: { task: idProperty, lag: { type: 'integer', description: 'Working days added (or removed, if negative). Default 0.' } }, required: ['task'], additionalProperties: false },
+    items: { type: 'object', properties: { task: idProperty, lag: { type: 'integer', minimum: 0, description: 'Working days added after the next working day of the predecessor end (0 or more; a task cannot start before its predecessors end). Default 0.' } }, required: ['task'], additionalProperties: false },
   },
 };
 const opSchema = {

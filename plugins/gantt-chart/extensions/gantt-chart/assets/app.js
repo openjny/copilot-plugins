@@ -920,7 +920,7 @@ function taskForm(row) {
       h('span', { class: 'pred-name', title: label }, label),
       h('input', {
         type: 'number',
-        min: '-999',
+        min: '0',
         max: '999',
         step: '1',
         value: String(pred.lag),
@@ -933,7 +933,7 @@ function taskForm(row) {
   });
   const candidates = tasks().filter((item) => item.id !== task.id && !task.predecessors.some((pred) => pred.task === item.id));
   const pick = h('select', { 'data-field': 'pred-pick', 'aria-label': '先行タスクを選択' }, h('option', { value: '' }, 'タスクを選択'), ...candidates.map((item) => h('option', { value: item.id }, `#${rowById(item.id).row} ${item.name}`)));
-  const lag = h('input', { type: 'number', min: '-999', max: '999', step: '1', value: '0', 'data-field': 'pred-lag', 'aria-label': '追加する先行タスクのラグ（稼働日）' });
+  const lag = h('input', { type: 'number', min: '0', max: '999', step: '1', value: '0', 'data-field': 'pred-lag', 'aria-label': '追加する先行タスクのラグ（稼働日）' });
 
   return h(
     'div',

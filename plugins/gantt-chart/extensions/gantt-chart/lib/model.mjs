@@ -175,7 +175,7 @@ const FIELD = {
       if (seen.has(item.task)) fail('invalid_input', `${where}: 先行タスク ${item.task} が重複しています。`);
       seen.add(item.task);
       const lag = item.lag === undefined ? 0 : item.lag;
-      if (!Number.isInteger(lag) || Math.abs(lag) > MAX_LAG) bad(`${where}.lag`, `±${MAX_LAG} 以内の整数（稼働日）`);
+      if (!Number.isInteger(lag) || lag < 0 || lag > MAX_LAG) bad(`${where}.lag`, `0〜${MAX_LAG} の整数（稼働日。先行タスクの終了前には開始できません）`);
       return { task: item.task, lag };
     });
   },
@@ -469,11 +469,25 @@ function patchTask(d, i, patch, cal) {
     const wanted = cal.next(parseDate(patch.start));
     if (driven) {
       // The start follows the predecessors, so moving it means changing their lags.
-      const delta = cal.diff(schedule(d, cal).rows[i].startDay, wanted);
+      const plan = schedule(d, cal);
+      const delta = cal.diff(plan.rows[i].startDay, wanted);
       if (delta) {
+        let limit = null;
+        for (const pred of task.predecessors) {
+          const row = plan.byId.get(pred.task);
+          const day = cal.add(row.endDay, 1);
+          if (limit === null || day > limit.day) limit = { day, row };
+        }
+        if (wanted < limit.day) {
+          fail(
+            'dependency_violation',
+            `「${task.name}」は先行タスク「${d.tasks[limit.row.index].name}」の終了（${formatDate(limit.row.endDay)}）より前には開始できません。最も早い開始日は ${formatDate(limit.day)} です。`,
+          );
+        }
+        // A predecessor that does not decide the start would go below 0; it stays at 0 and still ends before the start.
         task.predecessors = task.predecessors.map((pred) => {
-          const lag = pred.lag + delta;
-          if (Math.abs(lag) > MAX_LAG) fail('invalid_input', `ラグが ±${MAX_LAG} を超えます。`);
+          const lag = Math.max(0, pred.lag + delta);
+          if (lag > MAX_LAG) fail('invalid_input', `ラグが ${MAX_LAG} を超えます。`);
           return { task: pred.task, lag };
         });
       }

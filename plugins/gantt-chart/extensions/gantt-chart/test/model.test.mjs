@@ -57,6 +57,31 @@ test('setting the start of a dependent task changes the lag instead', () => {
   assert.equal(task.start, '2026-11-24');
 });
 
+test('a dependent task cannot start before its predecessors end', () => {
+  const doc = sample();
+  const before = serializeDoc(doc);
+  assert.throws(
+    () => ops(doc, [{ op: 'update', id: 'd', start: '2026-11-19' }]),
+    (error) => error.code === 'dependency_violation' && error.message.includes('2026-11-20'),
+  );
+  assert.equal(serializeDoc(doc), before);
+});
+
+test('moving a dependent task earlier only lowers the lag of the predecessor that decides the start', () => {
+  const doc = ops(sample(), [{ op: 'update', id: 'd', predecessors: [{ task: 'c', lag: 3 }, { task: 'b' }] }]);
+  const moved = ops(doc, [{ op: 'update', id: 'd', start: '2026-11-23' }]);
+  const task = moved.tasks.find((item) => item.id === 'd');
+  assert.deepEqual(task.predecessors, [{ task: 'c', lag: 1 }, { task: 'b', lag: 0 }]);
+  assert.equal(task.start, '2026-11-23');
+});
+
+test('a negative lag is rejected when editing and when reading a file', () => {
+  assert.throws(() => ops(sample(), [{ op: 'update', id: 'd', predecessors: [{ task: 'c', lag: -1 }] }]), (error) => error.code === 'invalid_input' && /lag/.test(error.message));
+  const raw = JSON.parse(serializeDoc(sample()));
+  raw.tasks.find((task) => task.id === 'd').predecessors = [{ task: 'c', lag: -1 }];
+  assert.throws(() => readDoc(raw), (error) => error.code === 'invalid_file' && /lag/.test(error.message));
+});
+
 test('an end date sets the duration in working days', () => {
   const doc = ops(sample(), [{ op: 'update', id: 'e', end: '2026-12-01' }]);
   assert.equal(doc.tasks.find((task) => task.id === 'e').duration, 5);
