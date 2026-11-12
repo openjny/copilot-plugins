@@ -447,6 +447,121 @@ function shiftLevels(tasks, from, to, delta) {
   }
 }
 
+/**
+ * Moves the start of a leaf task to `wanted` (a working day). A task with predecessors follows them, so
+ * moving it means changing their lags; a start before they end becomes the first day they allow, and
+ * that is reported as { start } (null when the start is as asked).
+ */
+function setStart(d, i, wanted, cal) {
+  const task = d.tasks[i];
+  if (!task.predecessors.length) {
+    task.start = formatDate(wanted);
+    return null;
+  }
+  const plan = schedule(d, cal);
+  const earliest = Math.max(...task.predecessors.map((pred) => cal.add(plan.byId.get(pred.task).endDay, 1)));
+  const target = Math.max(wanted, earliest);
+  const delta = cal.diff(plan.rows[i].startDay, target);
+  if (delta) {
+    // A predecessor that does not decide the start would go below 0; it stays at 0 and still ends before the start.
+    task.predecessors = task.predecessors.map((pred) => {
+      const lag = Math.max(0, pred.lag + delta);
+      if (lag > MAX_LAG) fail('invalid_input', `ラグが ${MAX_LAG} を超えます。`);
+      return { task: pred.task, lag };
+    });
+  }
+  return target > wanted ? { start: formatDate(target) } : null;
+}
+
+// ---- Sliding several tasks together -----------------------------------------------------------------------------
+
+/** The earliest day the model keeps: the first Monday of 1970. */
+export const FIRST_DAY = 4;
+const MAX_SLIDE = 2600;
+
+/** Indexes of the tasks that carry dates under the given ids: a parent stands for its children. */
+function leafIndexes(d, ids) {
+  const leaves = new Set();
+  for (const id of ids) {
+    const i = findIndex(d, id, 'ids');
+    for (let j = i, end = subtreeEnd(d.tasks, i); j < end; j++) if (!isSummary(d.tasks, j)) leaves.add(j);
+  }
+  return leaves;
+}
+
+/** Task indexes with every predecessor (and, for a parent, every child) before the task. */
+function dependencyOrder(tasks) {
+  const index = new Map(tasks.map((task, i) => [task.id, i]));
+  const seen = new Uint8Array(tasks.length);
+  const order = [];
+  const visit = (i) => {
+    if (seen[i]) return;
+    seen[i] = 1;
+    for (const pred of tasks[i].predecessors) visit(index.get(pred.task));
+    for (let j = i + 1, end = subtreeEnd(tasks, i); j < end; j = subtreeEnd(tasks, j)) visit(j);
+    order.push(i);
+  };
+  tasks.forEach((_, i) => visit(i));
+  return order;
+}
+
+/** Plans sliding the given tasks: which leaves move, in what order, and where each one starts now. */
+function planSlide(d, ids, cal) {
+  const leaves = leafIndexes(d, ids);
+  const plan = schedule(d, cal);
+  const order = dependencyOrder(d.tasks).filter((i) => leaves.has(i));
+  return { order, from: new Map(order.map((i) => [i, plan.rows[i].startDay])) };
+}
+
+/** The tasks slid by `days` working days on a copy, or null if any of them would have to start earlier than allowed. */
+function trySlide(d, slide, days, cal) {
+  const work = { project: d.project, tasks: structuredClone(d.tasks) };
+  for (const i of slide.order) {
+    const target = cal.add(slide.from.get(i), days);
+    if (target < FIRST_DAY || setStart(work, i, target, cal)) return null;
+  }
+  return work;
+}
+
+/** The largest number of working days (up to `max`) the tasks can all move earlier: one that does not push any task before its predecessors. */
+export function maxSlideEarlier(doc, ids, max = MAX_SLIDE) {
+  const cal = makeCalendar(doc.project);
+  const slide = planSlide(doc, ids, cal);
+  let ok = 0;
+  let over = max + 1;
+  while (over - ok > 1) {
+    const mid = Math.floor((ok + over) / 2);
+    if (trySlide(doc, slide, -mid, cal)) ok = mid;
+    else over = mid;
+  }
+  return ok;
+}
+
+/**
+ * Moves the tasks by `days` working days, keeping their positions relative to each other. Each task keeps
+ * its place among its predecessors (lags change only where a predecessor stays put). When that is not
+ * possible all the way, the move is cut down to the most that works. Returns the days actually moved.
+ */
+function slideTasks(d, ids, days, cal) {
+  const slide = planSlide(d, ids, cal);
+  const sign = Math.sign(days);
+  let moved = Math.abs(days);
+  let work = trySlide(d, slide, days, cal);
+  if (!work) {
+    let ok = 0;
+    let over = moved;
+    while (over - ok > 1) {
+      const mid = Math.floor((ok + over) / 2);
+      if (trySlide(d, slide, sign * mid, cal)) ok = mid;
+      else over = mid;
+    }
+    moved = ok;
+    work = ok ? trySlide(d, slide, sign * ok, cal) : null;
+  }
+  if (work) d.tasks = work.tasks;
+  return sign * moved;
+}
+
 function patchTask(d, i, patch, cal) {
   const task = d.tasks[i];
   if (patch.end !== undefined && patch.duration !== undefined) fail('invalid_input', 'end と duration は同時に指定できません。');
@@ -466,28 +581,7 @@ function patchTask(d, i, patch, cal) {
 
   const driven = task.predecessors.length > 0;
   let adjusted = null;
-  if (patch.start !== undefined) {
-    const wanted = cal.next(parseDate(patch.start));
-    if (driven) {
-      // The start follows the predecessors, so moving it means changing their lags.
-      const plan = schedule(d, cal);
-      // A start before the predecessors end is not possible: it becomes the first day they allow.
-      const earliest = Math.max(...task.predecessors.map((pred) => cal.add(plan.byId.get(pred.task).endDay, 1)));
-      const target = Math.max(wanted, earliest);
-      if (target > wanted) adjusted = { start: formatDate(target) };
-      const delta = cal.diff(plan.rows[i].startDay, target);
-      if (delta) {
-        // A predecessor that does not decide the start would go below 0; it stays at 0 and still ends before the start.
-        task.predecessors = task.predecessors.map((pred) => {
-          const lag = Math.max(0, pred.lag + delta);
-          if (lag > MAX_LAG) fail('invalid_input', `ラグが ${MAX_LAG} を超えます。`);
-          return { task: pred.task, lag };
-        });
-      }
-    } else {
-      task.start = formatDate(wanted);
-    }
-  }
+  if (patch.start !== undefined) adjusted = setStart(d, i, cal.next(parseDate(patch.start)), cal);
   if (patch.end !== undefined) {
     const first = driven ? schedule(d, cal).rows[i].startDay : cal.next(parseDate(task.start));
     const last = cal.prev(parseDate(patch.end));
@@ -545,6 +639,13 @@ function runOp(d, op, ctx) {
       allowKeys(op, ['op', 'id', 'end', ...TASK_FIELDS]);
       const adjusted = patchTask(d, findIndex(d, op.id, 'id'), readPatch(op), cal);
       return { op: 'update', id: op.id, ...(adjusted && { adjusted }) };
+    }
+    case 'slide': {
+      allowKeys(op, ['op', 'ids', 'days']);
+      if (!Array.isArray(op.ids) || !op.ids.length || op.ids.length > 500) bad('ids', 'タスク ID の配列（1〜500 件）');
+      if (!Number.isInteger(op.days) || Math.abs(op.days) > MAX_SLIDE) bad('days', `±${MAX_SLIDE} 以内の整数（稼働日）`);
+      const moved = slideTasks(d, op.ids, op.days, cal);
+      return { op: 'slide', ids: op.ids, days: moved, ...(moved !== op.days && { adjusted: { days: moved } }) };
     }
     case 'delete': {
       allowKeys(op, ['op', 'id']);
@@ -633,7 +734,7 @@ function runOp(d, op, ctx) {
       return { op: 'delete_snapshot', id: op.id };
     }
     default:
-      return fail('invalid_input', `未知の op "${op.op}" です（add, update, delete, move, indent, outdent, shift, project, snapshot, restore, delete_snapshot）。`);
+      return fail('invalid_input', `未知の op "${op.op}" です（add, update, delete, move, indent, outdent, shift, slide, project, snapshot, restore, delete_snapshot）。`);
   }
 }
 

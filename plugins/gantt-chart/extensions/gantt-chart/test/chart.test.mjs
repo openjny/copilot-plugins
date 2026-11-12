@@ -59,6 +59,18 @@ test('an edit is applied on top of changes made to the file in the meantime', as
   assert.equal(saved.tasks[0].progress, 50);
 });
 
+test('several selected tasks are reported to the agent once, and the ones that disappear are dropped', async () => {
+  const chart = newChart();
+  await chart.openFile(path.join(dir, 'selection.gantt.json'));
+  await chart.mutate([{ op: 'add', id: 'a', name: 'A', start: '2026-11-16' }, { op: 'add', id: 'b', name: 'B' }, { op: 'add', id: 'c', name: 'C' }]);
+  chart.select('b', ['a', 'b', 'zzz', 'c']);
+  assert.deepEqual(chart.consumeSelection().tasks.map((task) => task.id), ['b', 'a', 'c']);
+  assert.equal(chart.consumeSelection(), null);
+  await chart.mutate([{ op: 'delete', id: 'b' }]);
+  assert.equal(chart.selection, 'a');
+  assert.deepEqual(chart.consumeSelection().tasks.map((task) => task.id), ['a', 'c']);
+});
+
 test('a damaged file is reported and never overwritten', async () => {
   const chart = newChart();
   const file = path.join(dir, 'broken.gantt.json');

@@ -79,8 +79,10 @@ const taskFields = {
 const opSchema = {
   type: 'object',
   properties: {
-    op: { type: 'string', enum: ['add', 'update', 'delete', 'move', 'indent', 'outdent', 'shift', 'project', 'snapshot', 'restore', 'delete_snapshot'] },
+    op: { type: 'string', enum: ['add', 'update', 'delete', 'move', 'indent', 'outdent', 'shift', 'slide', 'project', 'snapshot', 'restore', 'delete_snapshot'] },
     id: { ...idProperty, description: 'add: an id for the new task (optional, generated if omitted). Other ops: the task (or, for restore and delete_snapshot, the version) to act on.' },
+    ids: { type: 'array', minItems: 1, maxItems: 500, items: idProperty, description: 'slide: the tasks to move together (a parent stands for its children).' },
+    days: { type: 'integer', minimum: -2600, maximum: 2600, description: 'slide: working days to move the tasks by (negative = earlier), keeping their positions relative to each other. A move that would start a task before its predecessors end is cut down to the most that works; the op result reports it in "adjusted.days".' },
     parent: { ...idProperty, description: 'add / move: place as the last child of this task.' },
     after: { ...idProperty, description: 'add / move: place right after this task and its children, at the same level.' },
     before: { ...idProperty, description: 'add / move: place right before this task, at the same level.' },
@@ -119,12 +121,12 @@ const ganttChart = createCanvas({
     },
     {
       name: 'get_chart',
-      description: 'Read the chart: every task with its computed start, end, duration and progress, the project summary, and the task the user has selected (selectedTaskId). Reads the file again first, so it also shows edits made to the file directly.',
+      description: 'Read the chart: every task with its computed start, end, duration and progress, the project summary, and the task the user has selected (selectedTaskId; selectedTaskIds lists them all when several are selected). Reads the file again first, so it also shows edits made to the file directly.',
       inputSchema: { type: 'object', properties: { includeVersions: { type: 'boolean', description: 'Also list the saved versions.' } }, additionalProperties: false },
       handler: (ctx) => guarded(async () => {
         const input = asObject(ctx.input);
         const chart = await openedChart(ctx);
-        return { ...chartView(chart, { includeVersions: input.includeVersions === true }), selectedTaskId: chart.selection };
+        return { ...chartView(chart, { includeVersions: input.includeVersions === true }), selectedTaskId: chart.selection, ...(chart.selectionIds.length > 1 && { selectedTaskIds: chart.selectionIds }) };
       }),
     },
     {
@@ -137,7 +139,7 @@ const ganttChart = createCanvas({
             type: 'array',
             minItems: 1,
             maxItems: 200,
-            description: 'Edits, applied in order. add {name, parent|after|before, start, end|duration, progress, effort, resources, color, predecessors, id}; update {id, ...fields}; delete {id} (with its children); move {id, parent|after|before}; indent/outdent {id}; shift {id, direction}; project {name, holidays}; snapshot {name} saves a version; restore {id}; delete_snapshot {id}.',
+            description: 'Edits, applied in order. add {name, parent|after|before, start, end|duration, progress, effort, resources, color, predecessors, id}; update {id, ...fields}; delete {id} (with its children); move {id, parent|after|before}; indent/outdent {id}; shift {id, direction}; slide {ids, days} moves tasks together by working days; project {name, holidays}; snapshot {name} saves a version; restore {id}; delete_snapshot {id}.',
             items: opSchema,
           },
         },
@@ -184,7 +186,13 @@ session = await joinSession({
         const lines = [];
         for (const [instanceId, chart] of charts) {
           const selected = chart.consumeSelection();
-          if (selected) lines.push(`- ${selected.file}: 行 ${selected.row}「${selected.name}」（task id: ${selected.id}、canvas instanceId: ${instanceId}）`);
+          if (!selected) continue;
+          if (selected.tasks.length === 1) {
+            const [task] = selected.tasks;
+            lines.push(`- ${selected.file}: 行 ${task.row}「${task.name}」（task id: ${task.id}、canvas instanceId: ${instanceId}）`);
+          } else {
+            lines.push(`- ${selected.file}: ${selected.tasks.length} 件のタスク（canvas instanceId: ${instanceId}）`, ...selected.tasks.map((task) => `  - 行 ${task.row}「${task.name}」（task id: ${task.id}）`));
+          }
         }
         if (!lines.length) return undefined;
         return { additionalContext: ['ガントチャート（canvas ' + CANVAS_ID + '）でユーザーが選択しているタスク:', ...lines, '「このタスク」などの指示は、選択中のタスクを指している可能性があります。'].join('\n') };

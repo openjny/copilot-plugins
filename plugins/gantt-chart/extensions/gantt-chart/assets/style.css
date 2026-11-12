@@ -121,7 +121,25 @@ button, input, select, textarea { font: inherit; color: inherit; }
 .vl { position: absolute; top: 0; bottom: 0; width: 1px; background: var(--line); opacity: 0.7; }
 .off-col { position: absolute; top: 0; bottom: 0; background: var(--off); }
 .today { position: absolute; top: 0; bottom: 0; width: 2px; background: var(--today); opacity: 0.75; z-index: 1; }
-.rowsel { position: absolute; left: 0; right: 0; height: var(--row-h); background: var(--sel); opacity: 0.7; }
+.rowsel { position: absolute; left: 0; right: 0; height: var(--row-h); background: var(--sel); opacity: 0.7; pointer-events: none; }
+.marquee { position: absolute; border: 1px solid var(--accent); background: color-mix(in srgb, var(--accent) 14%, transparent); pointer-events: none; z-index: 6; }
+
+/* Arrows around the selected bar start a dependency (see renderConnectors) */
+.conn { position: absolute; z-index: 6; pointer-events: none; }
+.conn-h { position: absolute; padding: 0; border: 0; background: var(--accent); opacity: 0; pointer-events: none; cursor: crosshair; transition: opacity 0.12s; }
+.conn.show .conn-h { opacity: 0.45; pointer-events: auto; }
+.conn.show .conn-h:hover { opacity: 0.95; }
+.conn-top { width: 16px; height: 9px; left: calc(50% - 8px); top: -10px; clip-path: polygon(50% 0, 100% 100%, 0 100%); }
+.conn-bottom { width: 16px; height: 9px; left: calc(50% - 8px); top: calc(100% + 1px); clip-path: polygon(0 0, 100% 0, 50% 100%); }
+.conn-left { width: 9px; height: 16px; left: -11px; top: calc(50% - 8px); clip-path: polygon(0 50%, 100% 0, 100% 100%); }
+.conn-right { width: 9px; height: 16px; left: calc(100% + 2px); top: calc(50% - 8px); clip-path: polygon(0 0, 100% 50%, 0 100%); }
+.busy .conn { display: none; }
+.rubber { position: absolute; left: 0; top: 0; pointer-events: none; z-index: 7; }
+.rubber line { stroke: var(--accent); stroke-width: 2; stroke-dasharray: 5 4; }
+.rubber circle { fill: var(--accent); }
+.bar.link-ok, .sbar.link-ok { outline: 2px solid var(--accent); outline-offset: 1px; }
+.bar.link-bad, .sbar.link-bad { outline: 2px dashed var(--danger); outline-offset: 1px; opacity: 0.6; }
+.picked { margin: 0; padding: 0 12px 12px 30px; font-size: 12px; color: var(--fg); columns: 3 220px; }
 
 /* Bars */
 .bar { position: absolute; height: 18px; border-radius: 3px; background: var(--bar); cursor: grab; touch-action: none; z-index: 2; }

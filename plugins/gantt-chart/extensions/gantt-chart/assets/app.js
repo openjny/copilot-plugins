@@ -1,4 +1,4 @@
-import { COLORS, dayOfWeek, formatDate, formatDuration, makeCalendar, mondayOnOrBefore, parseDate, parseDuration, schedule, subtreeEnd, todayDay, ymd } from '/model.mjs';
+import { COLORS, FIRST_DAY, dayOfWeek, formatDate, formatDuration, isSummary, makeCalendar, maxSlideEarlier, mondayOnOrBefore, parseDate, parseDuration, schedule, subtreeEnd, todayDay, ymd } from '/model.mjs';
 
 const ROW_H = 28;
 const LINK_LEG = 14;
@@ -6,7 +6,7 @@ const HEAD_H = 56;
 const PPD = { day: 48, week: 18, month: 5 };
 const MIN_DAYS = { day: 35, week: 140, month: 365 };
 // The timeline never starts before the first Monday of 1970 or ends after 2200 (the range of dates the model accepts).
-const MIN_START = 4;
+const MIN_START = FIRST_DAY;
 const MAX_END = parseDate('2200-12-31');
 const WEEKDAY = ['日', '月', '火', '水', '木', '金', '土'];
 const COLOR_NAME = { none: 'なし', green: '緑', orange: 'オレンジ', red: '赤', purple: '紫', teal: '青緑', gray: 'グレー' };
@@ -47,6 +47,9 @@ const app = {
   viewPath: null,
   autoScrolling: false,
   selected: null,
+  picked: new Set(),
+  link: null,
+  marquee: null,
   zoom: 'day',
   listOpen: false,
   detailOpen: false,
@@ -195,8 +198,14 @@ function applyState(state) {
       toast(`チャートを計算できません: ${error.message}`, 'error');
     }
   }
-  if (first && state.selection) app.selected = state.selection;
-  if (app.selected && !taskById(app.selected)) app.selected = null;
+  if (first && state.selection) {
+    app.selected = state.selection;
+    app.picked = new Set([state.selection]);
+  }
+  // Tasks that no longer exist drop out of the selection.
+  app.picked = new Set([...app.picked].filter((id) => taskById(id)));
+  if (app.selected && !taskById(app.selected)) app.selected = [...app.picked][0] ?? null;
+  if (app.selected) app.picked.add(app.selected);
   if (app.drag) {
     app.pendingRender = true;
     return;
@@ -231,6 +240,7 @@ function renderStart() {
     try {
       const data = await post('/api/open', { path });
       app.selected = null;
+      app.picked = new Set();
       app.panelKey = '';
       applyState(data.state);
     } catch (error) {
@@ -311,18 +321,9 @@ function renderTop() {
           {
             class: 'btn',
             type: 'button',
+            title: `${label}表示（Ctrl+↑ / Ctrl+↓ で日・週・月を切り替え）`,
             'aria-pressed': String(app.zoom === zoom),
-            onclick: () => {
-              const viewport = ui.scroller.clientWidth - listW();
-              const center = app.range ? app.range.start + (ui.scroller.scrollLeft + viewport / 2) / app.range.ppd : null;
-              app.zoom = zoom;
-              // Start the new range around the date at the center of the view, then put that date back in the middle.
-              const margin = marginDays(PPD[zoom]);
-              app.view = center === null ? null : { start: Math.floor(center) - margin, end: Math.ceil(center) + margin };
-              renderTop();
-              renderChart();
-              if (center !== null) ui.scroller.scrollLeft = Math.max(0, (center - app.range.start) * app.range.ppd - viewport / 2);
-            },
+            onclick: () => setZoom(zoom),
           },
           label,
         ),
@@ -340,6 +341,21 @@ function renderTop() {
     h('a', { class: 'btn tbtn', href: '/api/export', download: file.name, target: '_blank', title: 'JSON エクスポート', 'aria-label': 'JSON エクスポート' }, icon('download'), h('span', { class: 'label' }, 'JSON エクスポート')),
   );
   setSaving(app.saving);
+}
+
+const ZOOMS = Object.keys(ZOOM_NAME);
+
+function setZoom(zoom) {
+  if (zoom === app.zoom) return;
+  const viewport = ui.scroller.clientWidth - listW();
+  const center = app.range ? app.range.start + (ui.scroller.scrollLeft + viewport / 2) / app.range.ppd : null;
+  app.zoom = zoom;
+  // Start the new range around the date at the center of the view, then put that date back in the middle.
+  const margin = marginDays(PPD[zoom]);
+  app.view = center === null ? null : { start: Math.floor(center) - margin, end: Math.ceil(center) + margin };
+  renderTop();
+  renderChart();
+  if (center !== null) ui.scroller.scrollLeft = Math.max(0, (center - app.range.start) * app.range.ppd - viewport / 2);
 }
 
 function renderBanner() {
@@ -412,7 +428,8 @@ function siblingExists(list, i, direction) {
 
 function renderToolbar() {
   const list = tasks();
-  const row = selectedRow();
+  // The operations act on one task; with several selected they wait until the selection is back to one.
+  const row = app.picked.size > 1 ? undefined : selectedRow();
   const i = row ? row.index : -1;
   const set = (id, disabled) => {
     $(id).disabled = disabled;
@@ -444,7 +461,7 @@ async function onAdd() {
 }
 
 async function onDelete() {
-  const row = selectedRow();
+  const row = app.picked.size > 1 ? undefined : selectedRow();
   if (!row) return;
   const task = taskById(row.id);
   if (row.summary && !(await confirmDialog(`「${task.name}」と、その子タスクをすべて削除します。`, '削除'))) return;
@@ -622,7 +639,7 @@ function renderTimelineHeader() {
 
 function leftRow(row) {
   const task = taskById(row.id);
-  const selected = row.id === app.selected;
+  const selected = app.picked.has(row.id);
   const caret = row.summary
     ? h(
         'button',
@@ -663,7 +680,7 @@ function leftRow(row) {
   if (row.summary) attrs['aria-expanded'] = String(!task.collapsed);
   const el = h(
     'div',
-    { ...attrs, onclick: () => showDetail(row.id), ondblclick: () => startEdit(row.id) },
+    { ...attrs, onclick: (event) => clickTask(event, row.id), ondblclick: () => startEdit(row.id) },
     h('div', { class: 'c-no', role: 'gridcell' }, String(row.row)),
     h('div', { class: 'c-name', role: 'gridcell', style: { paddingLeft: `${6 + row.level * 16}px` } }, caret, name),
     h('div', { class: 'c-dur', role: 'gridcell' }, formatDuration(row.duration)),
@@ -700,6 +717,7 @@ function finishEdit(commit) {
 }
 
 function renderBody() {
+  cancelLink();
   const { start, days, ppd, today } = app.range;
   const named = !app.listOpen;
   const parts = [];
@@ -729,9 +747,11 @@ function renderBody() {
     const top = rowTop.get(row.id);
     const percent = Math.round(row.progress);
     const label = `${task.name}: ${formatDate(row.startDay)} – ${formatDate(row.endDay)}（${formatDuration(row.duration)}）進捗 ${percent}%`;
-    const selected = row.id === app.selected;
+    const selected = app.picked.has(row.id);
     if (row.summary) {
-      parts.push(h('div', { class: `sbar${selected ? ' sel' : ''}`, 'data-id': row.id, role: 'img', 'aria-label': label, title: label, style: { left: `${left}px`, width: `${width}px`, top: `${top + (named ? 14 : 8)}px` } }));
+      const sbar = h('div', { class: `sbar${selected ? ' sel' : ''}`, 'data-id': row.id, role: 'img', 'aria-label': label, title: label, style: { left: `${left}px`, width: `${width}px`, top: `${top + (named ? 14 : 8)}px` } });
+      wireBar(sbar, row);
+      parts.push(sbar);
       if (named) parts.push(h('div', { class: 'sum-label', style: { left: `${left}px`, top: `${top + 1}px` } }, `${task.name}  ${percent}%`));
       else parts.push(h('div', { class: 'after-label', style: { left: `${left + width}px`, top: `${top + 5}px` } }, `${percent}%`));
       continue;
@@ -745,10 +765,7 @@ function renderBody() {
       inside ? h('span', { class: `pct${named ? ' named' : ''}` }, named ? `${task.name}  ${percent}%` : `${percent}%`) : null,
       h('div', { class: 'grip' }),
     );
-    bar.addEventListener('pointerdown', (event) => beginDrag(event, row, bar));
-    bar.addEventListener('pointermove', onDragMove);
-    bar.addEventListener('pointerup', endDrag);
-    bar.addEventListener('pointercancel', endDrag);
+    wireBar(bar, row);
     parts.push(bar);
     if (named ? !inside : !inside || app.zoom !== 'day') parts.push(h('div', { class: 'after-label', style: { left: `${left + width}px`, top: `${top + 5}px` } }, `${task.name}  ${percent}%`));
   }
@@ -798,7 +815,7 @@ function linksLayer(rowTop) {
 function updateLinks() {
   const svg = ui.bt.querySelector('.links');
   if (!svg) return;
-  const related = [...svg.querySelectorAll('path.link')].filter((path) => app.selected && (path.dataset.from === app.selected || path.dataset.to === app.selected));
+  const related = [...svg.querySelectorAll('path.link')].filter((path) => app.picked.has(path.dataset.from) || app.picked.has(path.dataset.to));
   svg.classList.toggle('focus', related.length > 0);
   for (const path of svg.querySelectorAll('path.link')) {
     const on = related.includes(path);
@@ -811,11 +828,11 @@ function updateLinks() {
 
 function updateSelection() {
   for (const el of ui.bl.children) {
-    const selected = el.dataset.id === app.selected;
+    const selected = app.picked.has(el.dataset.id);
     el.classList.toggle('sel', selected);
     el.setAttribute('aria-selected', String(selected));
   }
-  for (const el of ui.bt.querySelectorAll('.bar, .sbar')) el.classList.toggle('sel', el.dataset.id === app.selected);
+  for (const el of ui.bt.querySelectorAll('.bar, .sbar')) el.classList.toggle('sel', app.picked.has(el.dataset.id));
   const band = ui.bt.querySelector('.rowsel');
   const top = app.selected ? app.rowTop?.get(app.selected) : undefined;
   if (band) {
@@ -823,16 +840,43 @@ function updateSelection() {
     if (top !== undefined) band.style.top = `${top}px`;
   }
   updateLinks();
+  renderConnectors();
 }
 
-function select(id) {
-  if (app.selected === id) return;
-  app.selected = id;
+/** Makes `ids` the selection; `primary` is the task the toolbar and the detail panel act on. */
+function pick(ids, primary = ids[0] ?? null, { notify = true } = {}) {
+  app.picked = new Set(ids);
+  app.selected = primary;
   updateSelection();
   renderToolbar();
   renderPanel();
   renderStatus();
-  post('/api/select', { id }).catch(() => {});
+  if (notify) post('/api/select', { id: app.selected, ids: [...app.picked] }).catch(() => {});
+}
+
+function select(id) {
+  if (app.selected === id && app.picked.size === 1) return;
+  pick([id], id);
+}
+
+function togglePick(id) {
+  const ids = new Set(app.picked);
+  if (ids.delete(id)) pick([...ids], app.selected === id ? ([...ids].pop() ?? null) : app.selected);
+  else pick([...ids, id], id);
+}
+
+// Shift selects every row between the task last picked and this one.
+function rangePick(id) {
+  const from = app.visible.findIndex((row) => row.id === app.selected);
+  const to = app.visible.findIndex((row) => row.id === id);
+  if (from < 0 || to < 0) return showDetail(id);
+  pick(app.visible.slice(Math.min(from, to), Math.max(from, to) + 1).map((row) => row.id), app.selected);
+}
+
+function clickTask(event, id) {
+  if (event.ctrlKey || event.metaKey) return togglePick(id);
+  if (event.shiftKey) return rangePick(id);
+  showDetail(id);
 }
 
 // Clicking a task also opens its details; while the panel is open it follows the selection, including keyboard moves.
@@ -869,54 +913,117 @@ function renderStatus() {
     `進捗: ${project.count ? `${project.progress.toFixed(2)}%` : '-'}`,
   ];
   const row = selectedRow();
-  if (row) parts.push(`${taskById(row.id).name}  ${slash(row.startDay)} – ${slash(row.endDay)} (${formatDuration(row.duration)})`);
+  if (app.picked.size > 1) parts.push(`${app.picked.size} 件を選択中`);
+  else if (row) parts.push(`${taskById(row.id).name}  ${slash(row.startDay)} – ${slash(row.endDay)} (${formatDuration(row.duration)})`);
   ui.status.replaceChildren(...parts.map((text) => h('span', {}, text)));
 }
 
 // ---- Dragging bars --------------------------------------------------------------------------------------------
 
+/** The leaf tasks under the given ids (a parent stands for its children). */
+function leavesOf(ids) {
+  const list = tasks();
+  const leaves = new Set();
+  for (const id of ids) {
+    const i = list.findIndex((task) => task.id === id);
+    if (i < 0) continue;
+    for (let j = i, end = subtreeEnd(list, i); j < end; j++) if (!isSummary(list, j)) leaves.add(list[j].id);
+  }
+  return [...leaves];
+}
+
+function wireBar(el, row) {
+  el.addEventListener('pointerdown', (event) => beginDrag(event, row, el));
+  el.addEventListener('pointermove', onDragMove);
+  el.addEventListener('pointerup', endDrag);
+  el.addEventListener('pointercancel', endDrag);
+}
+
 function beginDrag(event, row, bar) {
   if (event.button !== 0) return;
   event.preventDefault();
-  showDetail(row.id);
+  event.stopPropagation();
+  if (app.link) return completeLink(row.id);
+  const resize = event.target.classList.contains('grip');
+  const modifier = (event.ctrlKey || event.metaKey || event.shiftKey) && !resize;
+  if (modifier) {
+    clickTask(event, row.id);
+    if (!app.picked.has(row.id)) return;
+  } else if (resize || app.picked.size <= 1 || !app.picked.has(row.id)) {
+    showDetail(row.id);
+  }
+  // Pressing one of several selected bars keeps the group for a drag; a click without a drag then selects just that one.
+  const collapse = !modifier && !resize && app.picked.size > 1;
+  const group = resize ? [row.id] : [...app.picked];
+  const leaves = leavesOf(group);
+  const els = new Map([...group, ...leaves].map((id) => [id, ui.bt.querySelector(`[data-id="${id}"].bar, [data-id="${id}"].sbar`)]));
   bar.setPointerCapture(event.pointerId);
   bar.classList.add('dragging');
-  const preds = taskById(row.id).predecessors;
-  // The first day the predecessors allow; a bar cannot be dragged before it.
-  const earliest = preds.length ? Math.max(...preds.map((pred) => app.cal.add(rowById(pred.task).endDay, 1))) : -Infinity;
+  ui.bt.classList.add('busy');
   app.drag = {
     row,
     bar,
-    mode: event.target.classList.contains('grip') ? 'resize' : 'move',
+    mode: resize ? 'resize' : 'move',
+    group,
+    leaves,
+    els,
+    maxLeft: resize ? 0 : maxSlideEarlier(app.state.doc, group),
+    days: 0,
+    collapse,
+    moved: false,
     x0: event.clientX,
     scroll0: ui.scroller.scrollLeft,
     cx: event.clientX,
     cy: event.clientY,
     delta: 0,
     width: bar.offsetWidth,
-    earliest,
   };
 }
 
-function dragTarget(drag) {
-  const { row, delta, mode } = drag;
-  if (mode === 'move') {
-    const start = Math.max(app.cal.next(row.startDay + delta), drag.earliest);
-    return { start, end: app.cal.add(start, row.duration - 1), limited: start === drag.earliest && row.startDay + delta < start };
-  }
-  const end = app.cal.prev(row.endDay + delta);
-  return { start: row.startDay, end: Math.max(end, row.startDay) };
+/** Working days to move the dragged tasks by for the pointer's position, cut down to what their predecessors allow. */
+function slideDays(drag) {
+  const wanted = app.cal.diff(drag.row.startDay, app.cal.next(drag.row.startDay + drag.delta));
+  return { days: Math.max(wanted, -drag.maxLeft), limited: wanted < -drag.maxLeft };
+}
+
+function resizeTarget(drag) {
+  const end = app.cal.prev(drag.row.endDay + drag.delta);
+  return { start: drag.row.startDay, end: Math.max(end, drag.row.startDay) };
 }
 
 // The bar lives in the scrolled content, so the distance moved includes how far the view has scrolled since the drag began.
 function updateDrag(drag) {
   const ppd = app.range.ppd;
-  drag.delta = Math.round((drag.cx - drag.x0 + ui.scroller.scrollLeft - drag.scroll0) / ppd);
-  if (drag.mode === 'move') drag.bar.style.transform = `translateX(${Math.max(drag.delta, drag.earliest - drag.row.startDay) * ppd}px)`;
-  else drag.bar.style.width = `${Math.max(ppd, drag.width + drag.delta * ppd)}px`;
-  const target = dragTarget(drag);
+  const moved = drag.cx - drag.x0 + ui.scroller.scrollLeft - drag.scroll0;
+  drag.delta = Math.round(moved / ppd);
+  if (Math.abs(moved) > 3) drag.moved = true;
+  let start;
+  let end;
+  let note = '';
+  if (drag.mode === 'move') {
+    const { days, limited } = slideDays(drag);
+    drag.days = days;
+    // Every bar of the group moves by the same number of working days, so each is shifted from its own start.
+    for (const id of drag.group) {
+      const el = drag.els.get(id);
+      const from = rowById(id)?.startDay;
+      if (el && from !== undefined) el.style.transform = `translateX(${(app.cal.add(from, days) - from) * ppd}px)`;
+    }
+    for (const id of drag.leaves) {
+      const el = drag.els.get(id);
+      const from = rowById(id)?.startDay;
+      if (el && !drag.group.includes(id) && from !== undefined) el.style.transform = `translateX(${(app.cal.add(from, days) - from) * ppd}px)`;
+    }
+    start = app.cal.add(drag.row.startDay, days);
+    end = app.cal.add(drag.row.endDay, days);
+    if (drag.leaves.length > 1) note += `（${drag.leaves.length} 件を一緒に移動）`;
+    if (limited) note += ' 先行タスクの終了後が下限';
+  } else {
+    drag.bar.style.width = `${Math.max(ppd, drag.width + drag.delta * ppd)}px`;
+    ({ start, end } = resizeTarget(drag));
+  }
   ui.tip.hidden = false;
-  ui.tip.textContent = `${formatDate(target.start)} – ${formatDate(target.end)}（${formatDuration(app.cal.count(target.start, target.end))}）${target.limited ? ' 先行タスクの終了後が下限' : ''}`;
+  ui.tip.textContent = `${formatDate(start)} – ${formatDate(end)}（${formatDuration(app.cal.count(start, end))}）${note}`;
   ui.tip.style.left = `${drag.cx + 14}px`;
   ui.tip.style.top = `${drag.cy + 16}px`;
 }
@@ -961,12 +1068,13 @@ async function endDrag(event) {
   if (!drag) return;
   app.drag = null;
   ui.tip.hidden = true;
+  ui.bt.classList.remove('busy');
   drag.bar.classList.remove('dragging');
   let ops = null;
-  if (event.type === 'pointerup' && drag.delta) {
-    const target = dragTarget(drag);
-    const changed = drag.mode === 'move' ? target.start !== drag.row.startDay : target.end !== drag.row.endDay;
-    if (changed) ops = [{ op: 'update', id: drag.row.id, ...(drag.mode === 'move' ? { start: formatDate(target.start) } : { end: formatDate(target.end) }) }];
+  if (event.type === 'pointerup') {
+    if (drag.mode === 'move' && drag.days) ops = [{ op: 'slide', ids: drag.group, days: drag.days }];
+    else if (drag.mode === 'resize' && drag.delta && resizeTarget(drag).end !== drag.row.endDay) ops = [{ op: 'update', id: drag.row.id, end: formatDate(resizeTarget(drag).end) }];
+    else if (drag.collapse && !drag.moved) showDetail(drag.row.id);
   }
   if (ops) await send(ops);
   else if (app.sched) renderChart();
@@ -977,12 +1085,206 @@ async function endDrag(event) {
   growRange();
 }
 
+// ---- Selecting with a rectangle ------------------------------------------------------------------------------------
+
+ui.bt.addEventListener('pointerdown', (event) => {
+  if (event.button !== 0 || event.target.closest('.bar, .sbar, .conn-h')) return;
+  if (app.link) return cancelLink();
+  const additive = event.ctrlKey || event.metaKey;
+  app.marquee = { x0: event.clientX, y0: event.clientY, additive, base: additive ? new Set(app.picked) : new Set(), moved: false, el: null };
+  ui.bt.setPointerCapture(event.pointerId);
+});
+
+ui.bt.addEventListener('pointermove', (event) => {
+  if (app.marquee) return moveMarquee(app.marquee, event);
+  if (app.link?.sticky) updateLink(event);
+  revealConnectors(event);
+});
+
+ui.bt.addEventListener('pointerup', endMarquee);
+ui.bt.addEventListener('pointercancel', endMarquee);
+ui.bt.addEventListener('pointerleave', () => {
+  if (!app.link) ui.bt.querySelector('.conn')?.classList.remove('show');
+});
+
+function moveMarquee(marquee, event) {
+  if (!marquee.moved && Math.hypot(event.clientX - marquee.x0, event.clientY - marquee.y0) < 4) return;
+  marquee.moved = true;
+  const box = ui.bt.getBoundingClientRect();
+  const left = Math.min(marquee.x0, event.clientX) - box.left;
+  const right = Math.max(marquee.x0, event.clientX) - box.left;
+  const top = Math.min(marquee.y0, event.clientY) - box.top;
+  const bottom = Math.max(marquee.y0, event.clientY) - box.top;
+  if (!marquee.el) {
+    marquee.el = h('div', { class: 'marquee' });
+    ui.bt.append(marquee.el);
+  }
+  Object.assign(marquee.el.style, { left: `${left}px`, top: `${top}px`, width: `${right - left}px`, height: `${bottom - top}px` });
+  const { start, ppd } = app.range;
+  const hits = app.visible
+    .filter((row, i) => i * ROW_H + 5 < bottom && i * ROW_H + 5 + 18 > top && (row.startDay - start) * ppd < right && (row.endDay + 1 - start) * ppd > left)
+    .map((row) => row.id);
+  const ids = [...new Set([...marquee.base, ...hits])];
+  pick(ids, hits[0] ?? [...marquee.base].pop() ?? null, { notify: false });
+}
+
+function endMarquee(event) {
+  const marquee = app.marquee;
+  if (!marquee) return;
+  app.marquee = null;
+  marquee.el?.remove();
+  if (marquee.moved) {
+    post('/api/select', { id: app.selected, ids: [...app.picked] }).catch(() => {});
+  } else if (event.type === 'pointerup' && !marquee.additive) {
+    // A plain click on empty space selects the row under it, or clears the selection below the last row.
+    const row = app.visible[Math.floor((event.clientY - ui.bt.getBoundingClientRect().top) / ROW_H)];
+    if (row) showDetail(row.id);
+    else pick([], null);
+  }
+}
+
+// ---- Linking tasks with the mouse ----------------------------------------------------------------------------------
+
+// The arrows at the top and left of the selected bar make this task the successor of the one they are dragged to;
+// the arrows at the bottom and right make it the predecessor.
+const LINK_DIRECTION = { top: 'in', left: 'in', bottom: 'out', right: 'out' };
+const LINK_TITLE = {
+  in: '先行タスクにつなぐ（別のタスクへドラッグ、またはクリックしてからタスクを選ぶ）',
+  out: '後続タスクにつなぐ（別のタスクへドラッグ、またはクリックしてからタスクを選ぶ）',
+};
+
+function renderConnectors() {
+  ui.bt.querySelector('.conn')?.remove();
+  const row = app.picked.size === 1 ? selectedRow() : null;
+  const el = row && ui.bt.querySelector(`[data-id="${row.id}"].bar, [data-id="${row.id}"].sbar`);
+  if (!el) return;
+  // A parent task takes its dates from its children, so it cannot follow another task.
+  const sides = row.summary ? ['bottom', 'right'] : ['top', 'left', 'bottom', 'right'];
+  ui.bt.append(
+    h(
+      'div',
+      { class: `conn${app.link ? ' show' : ''}`, style: { left: `${el.offsetLeft}px`, top: `${el.offsetTop}px`, width: `${el.offsetWidth}px`, height: `${el.offsetHeight}px` } },
+      ...sides.map((side) => h('button', { class: `conn-h conn-${side}`, type: 'button', tabindex: '-1', title: LINK_TITLE[LINK_DIRECTION[side]], 'aria-label': LINK_TITLE[LINK_DIRECTION[side]], onpointerdown: (event) => beginLink(event, row, side), onpointermove: updateLink, onpointerup: releaseLink, onpointercancel: cancelLink })),
+    ),
+  );
+}
+
+/** Shows the arrows while the pointer is near the selected bar. */
+function revealConnectors(event) {
+  const conn = ui.bt.querySelector('.conn');
+  if (!conn || app.drag || app.marquee) return;
+  const box = conn.getBoundingClientRect();
+  const near = event.clientX > box.left - 22 && event.clientX < box.right + 22 && event.clientY > box.top - 20 && event.clientY < box.bottom + 20;
+  conn.classList.toggle('show', near || Boolean(app.link));
+}
+
+function beginLink(event, row, side) {
+  if (event.button !== 0) return;
+  event.preventDefault();
+  event.stopPropagation();
+  cancelLink();
+  event.currentTarget.setPointerCapture(event.pointerId);
+  const el = ui.bt.querySelector(`[data-id="${row.id}"].bar, [data-id="${row.id}"].sbar`);
+  const x = side === 'left' ? el.offsetLeft : side === 'right' ? el.offsetLeft + el.offsetWidth : el.offsetLeft + el.offsetWidth / 2;
+  const y = side === 'top' ? el.offsetTop : side === 'bottom' ? el.offsetTop + el.offsetHeight : el.offsetTop + el.offsetHeight / 2;
+  const line = svgEl('line', { x1: x, y1: y, x2: x, y2: y });
+  const dot = svgEl('circle', { cx: x, cy: y, r: 4 });
+  const svg = svgEl('svg', { class: 'rubber', width: ui.bt.offsetWidth, height: ui.bt.offsetHeight, 'aria-hidden': 'true' });
+  svg.append(line, dot);
+  ui.bt.append(svg);
+  app.link = { id: row.id, dir: LINK_DIRECTION[side], x0: event.clientX, y0: event.clientY, moved: false, sticky: false, target: null, svg, line, dot };
+  ui.bt.querySelector('.conn')?.classList.add('show');
+}
+
+/** Why `targetId` cannot be connected to the task being linked, or '' when it can. */
+function linkProblem(targetId) {
+  const link = app.link;
+  if (targetId === link.id) return '自分自身にはつなげません。';
+  const [pred, succ] = link.dir === 'out' ? [link.id, targetId] : [targetId, link.id];
+  if (rowById(succ)?.summary) return '子タスクを持つタスクは、先行タスクを持てません（日付が子タスクから決まるため）。';
+  if (taskById(succ).predecessors.some((item) => item.task === pred)) return 'すでにつながっています。';
+  if (dependsOn(pred, succ)) return 'つなぐと先行タスクが循環します。';
+  return '';
+}
+
+/** Whether `id` needs `wanted` to finish first: through predecessors, or, for a parent, through its children. */
+function dependsOn(id, wanted) {
+  const list = tasks();
+  const seen = new Set();
+  const stack = [id];
+  while (stack.length) {
+    const current = stack.pop();
+    if (current === wanted) return true;
+    if (seen.has(current)) continue;
+    seen.add(current);
+    const i = list.findIndex((task) => task.id === current);
+    stack.push(...list[i].predecessors.map((item) => item.task));
+    for (let j = i + 1, end = subtreeEnd(list, i); j < end; j = subtreeEnd(list, j)) stack.push(list[j].id);
+  }
+  return false;
+}
+
+function updateLink(event) {
+  const link = app.link;
+  if (!link) return;
+  const box = ui.bt.getBoundingClientRect();
+  link.line.setAttribute('x2', event.clientX - box.left);
+  link.line.setAttribute('y2', event.clientY - box.top);
+  link.dot.setAttribute('cx', event.clientX - box.left);
+  link.dot.setAttribute('cy', event.clientY - box.top);
+  if (Math.hypot(event.clientX - link.x0, event.clientY - link.y0) > 4) link.moved = true;
+  const over = document.elementsFromPoint(event.clientX, event.clientY).find((el) => el.matches?.('.bar, .sbar'));
+  for (const el of ui.bt.querySelectorAll('.link-ok, .link-bad')) el.classList.remove('link-ok', 'link-bad');
+  link.target = null;
+  if (!over || over.dataset.id === link.id) return;
+  const ok = !linkProblem(over.dataset.id);
+  over.classList.add(ok ? 'link-ok' : 'link-bad');
+  if (ok) link.target = over.dataset.id;
+}
+
+// Dragging an arrow onto a task connects them; clicking an arrow waits for the next click on a task.
+function releaseLink(event) {
+  const link = app.link;
+  if (!link || link.sticky) return;
+  updateLink(event);
+  if (!link.moved) {
+    link.sticky = true;
+    toast('つなぎたいタスクをクリックしてください（Esc で取り消し）');
+    return;
+  }
+  const over = document.elementsFromPoint(event.clientX, event.clientY).find((el) => el.matches?.('.bar, .sbar'));
+  if (over && over.dataset.id !== link.id) completeLink(over.dataset.id);
+  else cancelLink();
+}
+
+function cancelLink() {
+  const link = app.link;
+  if (!link) return;
+  app.link = null;
+  link.svg.remove();
+  for (const el of ui.bt.querySelectorAll('.link-ok, .link-bad')) el.classList.remove('link-ok', 'link-bad');
+  ui.bt.querySelector('.conn')?.classList.remove('show');
+}
+
+async function completeLink(targetId) {
+  const link = app.link;
+  if (!link) return;
+  const problem = linkProblem(targetId);
+  cancelLink();
+  if (problem) return toast(problem, 'error');
+  const source = taskById(link.id);
+  const target = taskById(targetId);
+  const [follower, before] = link.dir === 'out' ? [target, source] : [source, target];
+  await send([{ op: 'update', id: follower.id, predecessors: [...follower.predecessors, { task: before.id, lag: 0 }] }]);
+}
+
 // ---- Detail panel -----------------------------------------------------------------------------------------------
 
 function renderPanel() {
   if (!app.sched || !app.state.file) return;
   const row = selectedRow();
-  const open = app.detailOpen && Boolean(row);
+  const several = app.picked.size > 1;
+  const open = app.detailOpen && (several || Boolean(row));
   if (open === ui.panel.hidden) {
     ui.panel.hidden = !open;
     afterPanelToggle();
@@ -992,7 +1294,7 @@ function renderPanel() {
     return;
   }
   const brief = tasks().map((task) => [task.id, task.name]);
-  const key = JSON.stringify([taskById(row.id), row.startDay, row.endDay, row.duration, row.progress, row.summary, row.row, brief, app.state.file.path]);
+  const key = several ? JSON.stringify(['several', [...app.picked], brief]) : JSON.stringify([taskById(row.id), row.startDay, row.endDay, row.duration, row.progress, row.summary, row.row, brief, app.state.file.path]);
   if (key === app.panelKey) return;
   app.panelKey = key;
 
@@ -1001,16 +1303,23 @@ function renderPanel() {
   const caret = field && 'selectionStart' in active ? [active.selectionStart, active.selectionEnd] : null;
   const scrollTop = ui.panel.querySelector('.pbody')?.scrollTop ?? 0;
 
+  const close = h('button', { class: 'btn flat square', type: 'button', 'aria-label': '詳細を閉じる', title: '閉じる（Esc）', onclick: closeDetail }, '×');
+  if (several) {
+    const names = [...app.picked].map((id) => taskById(id)?.name).filter(Boolean);
+    ui.panel.replaceChildren(
+      h('div', { class: 'ph' }, h('span', { class: 'pt' }, `${names.length} 件のタスクを選択中`), close),
+      h(
+        'div',
+        { class: 'pbody' },
+        h('p', { class: 'hint' }, 'いずれかのバーをドラッグすると、選択中のタスクを相対位置のまま一緒に動かせます。Esc で選択を 1 件に戻します。'),
+        h('ul', { class: 'picked' }, ...names.map((name) => h('li', {}, name))),
+      ),
+    );
+    return;
+  }
+
   const task = taskById(row.id);
-  ui.panel.replaceChildren(
-    h(
-      'div',
-      { class: 'ph' },
-      h('span', { class: 'pt', title: task.name }, `#${row.row}  ${task.name}`),
-      h('button', { class: 'btn flat square', type: 'button', 'aria-label': '詳細を閉じる', title: '閉じる（Esc）', onclick: closeDetail }, '×'),
-    ),
-    h('div', { class: 'pbody' }, taskForm(row)),
-  );
+  ui.panel.replaceChildren(h('div', { class: 'ph' }, h('span', { class: 'pt', title: task.name }, `#${row.row}  ${task.name}`), close), h('div', { class: 'pbody' }, taskForm(row)));
   ui.panel.querySelector('.pbody').scrollTop = scrollTop;
 
   if (field) {
@@ -1232,7 +1541,7 @@ function renderVersions() {
 // ---- Keyboard and boot -------------------------------------------------------------------------------------------
 
 ui.bl.addEventListener('keydown', (event) => {
-  if (event.target !== ui.bl || !app.visible.length) return;
+  if (event.target !== ui.bl || !app.visible.length || event.ctrlKey || event.metaKey || event.altKey) return;
   const index = app.visible.findIndex((row) => row.id === app.selected);
   const go = (i) => {
     const row = app.visible[Math.max(0, Math.min(i, app.visible.length - 1))];
@@ -1254,11 +1563,25 @@ ui.bl.addEventListener('keydown', (event) => {
   event.preventDefault();
 });
 
-ui.bt.addEventListener('click', (event) => {
-  const bar = event.target.closest('.bar, .sbar');
-  if (bar) return showDetail(bar.dataset.id);
-  const row = app.visible[Math.floor((event.clientY - ui.bt.getBoundingClientRect().top) / ROW_H)];
-  if (row) showDetail(row.id);
+const isTyping = (el) => el instanceof HTMLElement && (el.isContentEditable || ['INPUT', 'TEXTAREA', 'SELECT'].includes(el.tagName));
+
+document.addEventListener('keydown', (event) => {
+  if (ui.editor.hidden || document.querySelector('dialog[open]')) return;
+  if (event.key === 'Escape') {
+    if (app.link) {
+      cancelLink();
+      event.preventDefault();
+    } else if (app.picked.size > 1 && !isTyping(event.target)) {
+      pick(app.selected ? [app.selected] : [], app.selected);
+    }
+    return;
+  }
+  // Ctrl+Up zooms in (day), Ctrl+Down zooms out (month).
+  if (!event.ctrlKey || event.altKey || event.shiftKey || event.metaKey || isTyping(event.target)) return;
+  if (event.key !== 'ArrowUp' && event.key !== 'ArrowDown') return;
+  event.preventDefault();
+  const next = ZOOMS[Math.max(0, Math.min(ZOOMS.indexOf(app.zoom) + (event.key === 'ArrowDown' ? 1 : -1), ZOOMS.length - 1))];
+  setZoom(next);
 });
 
 let resizeTimer;

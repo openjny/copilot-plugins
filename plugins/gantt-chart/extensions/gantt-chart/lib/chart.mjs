@@ -17,6 +17,7 @@ export class Chart {
     this.stamp = null;
     this.error = null;
     this.selection = null;
+    this.selectionIds = [];
     this.reportedSelection = null;
     this.recent = [];
     this.listeners = new Set();
@@ -81,6 +82,7 @@ export class Chart {
       this.stamp = await statStamp(file);
       this.error = null;
       this.selection = null;
+      this.selectionIds = [];
       this.reportedSelection = null;
     });
     this.#startPolling();
@@ -96,6 +98,7 @@ export class Chart {
     this.stamp = null;
     this.error = null;
     this.selection = null;
+    this.selectionIds = [];
     this.recent = await loadRecent(this.log);
     this.#changed();
   }
@@ -123,7 +126,7 @@ export class Chart {
     this.doc = loaded.doc;
     this.hash = loaded.hash;
     this.error = null;
-    if (this.selection && !this.doc.tasks.some((task) => task.id === this.selection)) this.selection = null;
+    this.#pruneSelection();
     this.#changed();
     return true;
   }
@@ -143,23 +146,38 @@ export class Chart {
         this.stamp = await statStamp(this.file);
       }
       this.doc = doc;
-      if (this.selection && !doc.tasks.some((task) => task.id === this.selection)) this.selection = null;
+      this.#pruneSelection();
       this.#changed();
       return { results };
     });
   }
 
-  select(id) {
-    if (id !== null && (typeof id !== 'string' || !this.doc?.tasks.some((task) => task.id === id))) return;
-    this.selection = id;
+  #pruneSelection() {
+    const known = new Set(this.doc?.tasks.map((task) => task.id));
+    this.selectionIds = this.selectionIds.filter((id) => known.has(id));
+    if (this.selection && !known.has(this.selection)) this.selection = this.selectionIds[0] ?? null;
   }
 
-  /** The task the user selected, once per change, for the agent's next turn. */
+  /** `id` is the task the user is working on; `ids` all the tasks selected (including it). */
+  select(id, ids) {
+    const known = new Set(this.doc?.tasks.map((task) => task.id));
+    if (id !== null && (typeof id !== 'string' || !known.has(id))) return;
+    this.selection = id;
+    const more = Array.isArray(ids) ? ids.filter((other) => typeof other === 'string' && known.has(other)) : [];
+    this.selectionIds = [...new Set([...(id ? [id] : []), ...more])].slice(0, 200);
+  }
+
+  /** The tasks the user selected, once per change, for the agent's next turn. */
   consumeSelection() {
-    if (!this.doc || this.selection === this.reportedSelection) return null;
-    this.reportedSelection = this.selection;
-    const index = this.doc.tasks.findIndex((task) => task.id === this.selection);
-    return index < 0 ? null : { file: this.file, row: index + 1, id: this.selection, name: this.doc.tasks[index].name };
+    const key = this.selectionIds.join(',');
+    if (!this.doc || key === this.reportedSelection) return null;
+    this.reportedSelection = key;
+    const tasks = [];
+    for (const id of this.selectionIds) {
+      const index = this.doc.tasks.findIndex((task) => task.id === id);
+      if (index >= 0) tasks.push({ row: index + 1, id, name: this.doc.tasks[index].name });
+    }
+    return tasks.length ? { file: this.file, tasks } : null;
   }
 
   exportText() {

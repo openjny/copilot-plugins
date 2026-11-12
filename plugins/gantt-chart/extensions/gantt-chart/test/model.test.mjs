@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { applyOps, describe, emptyDoc, finalize, formatDate, makeCalendar, parseDate, parseDuration, readDoc, schedule, serializeDoc } from '../lib/model.mjs';
+import { applyOps, describe, emptyDoc, finalize, formatDate, makeCalendar, maxSlideEarlier, parseDate, parseDuration, readDoc, schedule, serializeDoc } from '../lib/model.mjs';
 
 const NOW = new Date(2026, 10, 12, 9, 30);
 const ops = (doc, list) => applyOps(doc, list, { now: NOW }).doc;
@@ -85,6 +85,48 @@ test('a negative lag is rejected when editing and when reading a file', () => {
   const raw = JSON.parse(serializeDoc(sample()));
   raw.tasks.find((task) => task.id === 'd').predecessors = [{ task: 'c', lag: -1 }];
   assert.throws(() => readDoc(raw), (error) => error.code === 'invalid_file' && /lag/.test(error.message));
+});
+
+test('slide moves tasks together by working days and keeps their positions relative to each other', () => {
+  const cal = makeCalendar({ holidays: [] });
+  const doc = ops(sample(), [{ op: 'slide', ids: ['b', 'e'], days: 3 }]);
+  const start = (id) => day(doc.tasks.find((task) => task.id === id).start);
+  assert.equal(formatDate(start('b')), '2026-11-19');
+  assert.equal(formatDate(start('e')), '2026-11-30');
+  assert.equal(cal.diff(start('b'), start('e')), cal.diff(day('2026-11-16'), day('2026-11-25')));
+  assert.equal(formatDate(start('c')), '2026-11-23');
+});
+
+test('sliding a parent moves its children and leaves the lags between them alone', () => {
+  const run = applyOps(sample(), [{ op: 'slide', ids: ['a'], days: -2 }], { now: NOW });
+  const by = Object.fromEntries(run.doc.tasks.map((task) => [task.id, task]));
+  assert.deepEqual([by.b.start, by.c.start, by.d.start], ['2026-11-12', '2026-11-16', '2026-11-18']);
+  assert.deepEqual(by.c.predecessors, [{ task: 'b', lag: 0 }]);
+  assert.deepEqual(run.results[0], { op: 'slide', ids: ['a'], days: -2 });
+});
+
+test('slide is cut down to what the predecessors allow', () => {
+  const doc = ops(sample(), [{ op: 'update', id: 'd', predecessors: [{ task: 'c', lag: 2 }] }]);
+  const run = applyOps(doc, [{ op: 'slide', ids: ['d'], days: -5 }], { now: NOW });
+  const task = run.doc.tasks.find((item) => item.id === 'd');
+  assert.equal(task.start, '2026-11-20');
+  assert.deepEqual(task.predecessors, [{ task: 'c', lag: 0 }]);
+  assert.deepEqual(run.results[0].adjusted, { days: -2 });
+  assert.equal(maxSlideEarlier(doc, ['d']), 2);
+});
+
+test('sliding a dependent task later raises its lag and carries what follows it', () => {
+  const run = applyOps(sample(), [{ op: 'slide', ids: ['c'], days: 3 }], { now: NOW });
+  const by = Object.fromEntries(run.doc.tasks.map((task) => [task.id, task]));
+  assert.deepEqual(by.c.predecessors, [{ task: 'b', lag: 3 }]);
+  assert.deepEqual([by.c.start, by.d.start], ['2026-11-23', '2026-11-25']);
+  assert.equal(run.results[0].adjusted, undefined);
+});
+
+test('slide rejects unknown tasks and bad days', () => {
+  assert.throws(() => ops(sample(), [{ op: 'slide', ids: ['zzz'], days: 1 }]), (error) => error.code === 'not_found');
+  assert.throws(() => ops(sample(), [{ op: 'slide', ids: ['b'], days: 1.5 }]), (error) => error.code === 'invalid_input');
+  assert.throws(() => ops(sample(), [{ op: 'slide', ids: [], days: 1 }]), (error) => error.code === 'invalid_input');
 });
 
 test('an end date sets the duration in working days', () => {

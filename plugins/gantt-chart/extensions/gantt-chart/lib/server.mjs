@@ -104,7 +104,7 @@ export async function startServer(chart, { log }) {
         return sendJson(res, 200, { ok: true, state: chart.clientState() });
       }
       if (url.pathname === '/api/select') {
-        chart.select(body.id ?? null);
+        chart.select(body.id ?? null, body.ids);
         return sendJson(res, 200, { ok: true });
       }
       if (url.pathname === '/api/theme') {
