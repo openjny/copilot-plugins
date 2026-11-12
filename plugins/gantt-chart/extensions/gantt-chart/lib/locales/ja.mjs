@@ -177,7 +177,7 @@ export default {
   'color.gray': 'グレー',
 
   'tb.aria': 'タスクの操作',
-  'tb.list': 'タスク名・期間・担当の表示 / 非表示（# は常に表示）',
+  'tb.list': 'タスク名の列の表示 / 非表示（# は常に表示。期間や担当は列の設定で選べます）',
   'tb.labels': 'チャート上のタスク名の表示 / 非表示',
   'tb.undo': '元に戻す（Ctrl+Z）',
   'tb.undoWith': '元に戻す: {label}（Ctrl+Z）',
@@ -254,6 +254,7 @@ export default {
   'list.collapse': '折りたたむ',
   'list.unnamed': '（名称なし）',
   'col.name': 'タスク名',
+  'col.menu': 'リストに表示する項目',
   'col.dur': '期間',
   'col.res': '担当',
   'ins.above': '#{row} の上にタスクを挿入',

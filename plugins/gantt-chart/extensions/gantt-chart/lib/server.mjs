@@ -79,7 +79,7 @@ export async function startServer(chart, { log }) {
       if (url.pathname === '/') {
         // Put the saved theme, language and view choices on <html> so the first paint already uses them.
         const [theme, locale, view] = await Promise.all([loadTheme(), loadLocale(), loadView()]);
-        const attrs = `data-theme="${theme}" data-locale="${locale}" data-list="${view.list ? 'open' : 'closed'}" data-labels="${view.labels ? 'on' : 'off'}"`;
+        const attrs = `data-theme="${theme}" data-locale="${locale}" data-list="${view.list ? 'open' : 'closed'}" data-labels="${view.labels ? 'on' : 'off'}" data-cols="${view.cols.join(',')}"`;
         const html = (await fs.readFile(FILES['/'][0], 'utf8')).replace('<html ', `<html ${attrs} `);
         res.writeHead(200, { ...SECURITY_HEADERS, 'Content-Type': FILES['/'][1] });
         return res.end(html);

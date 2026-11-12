@@ -216,19 +216,27 @@ test('the chosen language is saved and put on the page, and the messages that co
   assert.equal(await locale(), 'auto');
 });
 
-test('the view choices (task names on the chart, task list) are saved one by one and put on the page', async () => {
+test('the view choices (task names on the chart, task list, its columns) are saved one by one and put on the page', async () => {
   const chart = newChart();
   await chart.ensureServer();
   await chart.openFile('view.gantt.json');
-  const attrs = async () => (await (await fetch(chart.url)).text()).match(/data-list="(\w+)" data-labels="(\w+)"/)?.slice(1).join(',');
+  const attrs = async () => (await (await fetch(chart.url)).text()).match(/data-list="(\w+)" data-labels="(\w+)" data-cols="([\w,]*)"/)?.slice(1).join(',');
   const choose = (body) => fetch(`${chart.url}api/view`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
 
-  assert.equal(await attrs(), 'closed,on');
+  assert.equal(await attrs(), 'closed,on,', 'the name is the only column by default');
   assert.equal((await choose({ list: true })).status, 200);
-  assert.equal(await attrs(), 'open,on');
+  assert.equal(await attrs(), 'open,on,');
   assert.equal((await choose({ labels: false })).status, 200);
-  assert.equal(await attrs(), 'open,off');
+  assert.equal(await attrs(), 'open,off,');
+  assert.equal((await choose({ cols: ['res', 'dur', 'res'] })).status, 200);
+  assert.equal(await attrs(), 'open,off,dur,res', 'in their fixed order, without repeats');
+  assert.equal((await choose({ list: false })).status, 200);
+  assert.equal(await attrs(), 'closed,off,dur,res', 'the columns are kept when the list is folded');
+  assert.equal((await choose({ cols: [] })).status, 200);
+  assert.equal(await attrs(), 'closed,off,');
   assert.equal((await choose({ list: 'yes' })).status, 400);
   assert.equal((await choose({ zoom: true })).status, 400);
-  assert.equal(await attrs(), 'open,off');
+  assert.equal((await choose({ cols: ['name'] })).status, 400, 'the name is not a choice');
+  assert.equal((await choose({ cols: 'dur' })).status, 400);
+  assert.equal(await attrs(), 'closed,off,');
 });

@@ -171,24 +171,39 @@ export const saveTheme = (theme) => saveChoice('theme', theme, THEMES);
 export const loadLocale = () => loadChoice('locale', LOCALE_PREFS);
 export const saveLocale = (locale) => saveChoice('locale', locale, LOCALE_PREFS);
 
-/** What the page shows besides the chart itself, as the user left it: the task names on the chart, and the task list on the left. */
-export const VIEW_DEFAULT = { labels: true, list: false };
+/** What the page shows besides the chart itself, as the user left it: the task names on the chart, the task list on the left, and which optional columns the list has (the name is always there). */
+export const VIEW_COLS = ['dur', 'res'];
+export const VIEW_DEFAULT = { labels: true, list: false, cols: [] };
+
+/** The column keys in their fixed order, without unknown ones or repeats. */
+const knownCols = (value) => VIEW_COLS.filter((key) => value.includes(key));
 
 export async function loadView() {
   try {
     const saved = JSON.parse(await fs.readFile(prefFile('view'), 'utf8'));
-    return Object.fromEntries(Object.entries(VIEW_DEFAULT).map(([key, fallback]) => [key, typeof saved[key] === 'boolean' ? saved[key] : fallback]));
+    return Object.fromEntries(
+      Object.entries(VIEW_DEFAULT).map(([key, fallback]) => {
+        if (Array.isArray(fallback)) return [key, Array.isArray(saved[key]) ? knownCols(saved[key]) : fallback];
+        return [key, typeof saved[key] === 'boolean' ? saved[key] : fallback];
+      }),
+    );
   } catch {
     return { ...VIEW_DEFAULT };
   }
 }
 
-/** Saves the given switches (`labels`, `list`); the ones left out keep their value. */
+/** Saves the given switches (`labels`, `list`) and column list (`cols`); the ones left out keep their value. */
 export async function saveView(change) {
   const view = await loadView();
   for (const [key, value] of Object.entries(change ?? {})) {
-    if (!(key in VIEW_DEFAULT) || typeof value !== 'boolean') fail('invalid_request', 'err.badChoice', { name: key, choices: 'true / false' });
-    view[key] = value;
+    if (!(key in VIEW_DEFAULT)) fail('invalid_request', 'err.badChoice', { name: key, choices: Object.keys(VIEW_DEFAULT).join(' / ') });
+    if (key === 'cols') {
+      if (!Array.isArray(value) || value.some((item) => !VIEW_COLS.includes(item))) fail('invalid_request', 'err.badChoice', { name: key, choices: VIEW_COLS.join(' / ') });
+      view.cols = knownCols(value);
+    } else {
+      if (typeof value !== 'boolean') fail('invalid_request', 'err.badChoice', { name: key, choices: 'true / false' });
+      view[key] = value;
+    }
   }
   try {
     await fs.mkdir(dataDir(), { recursive: true });

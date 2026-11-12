@@ -116,6 +116,9 @@ button, input, select, textarea { font: inherit; color: inherit; }
 .cols { display: grid; grid-template-columns: var(--cols, 36px 1fr 56px 88px); align-items: center; }
 .hl .cols { height: 100%; font-size: 12px; color: var(--muted); font-weight: 600; }
 .hl .cols > div { padding: 0 6px; }
+.hl .cols > .h-name { display: flex; align-items: center; justify-content: space-between; padding-right: 2px; }
+.hl .col-menu { width: 22px; height: 22px; padding: 0; color: var(--muted); }
+.hl .col-menu .icon { width: 14px; height: 14px; }
 .hl .cols > div:first-child { align-self: stretch; display: flex; align-items: center; justify-content: center; background: var(--gutter); color: var(--gutter-fg); border-right: 1px solid var(--line); }
 /* Drag handles at the right edge of each list column, as tall as the chart (see renderSplits) */
 .splits { position: absolute; left: 0; top: 0; right: 0; bottom: var(--sb-h, 0px); z-index: 9; pointer-events: none; }
@@ -322,6 +325,13 @@ button, input, select, textarea { font: inherit; color: inherit; }
 .panel[class*="tc-"] .ph { background: color-mix(in srgb, var(--tc) 12%, var(--head)); border-bottom-color: color-mix(in srgb, var(--tc) 30%, var(--line)); }
 .panel[class*="tc-"] .pno { color: color-mix(in srgb, var(--tc) 75%, var(--fg)); font-weight: 600; }
 .form input[type="range"] { accent-color: var(--accent); }
+/* The track is drawn here, not by accent-color: the browser derives the unfilled part from the accent and makes it nearly black for some colors (green). */
+.form input[type="range"] { -webkit-appearance: none; appearance: none; height: 20px; margin: 0; padding: 0; background: transparent; cursor: pointer; }
+.form input[type="range"]::-webkit-slider-runnable-track { height: 6px; border-radius: 3px; background: linear-gradient(to right, var(--accent) var(--p, 0%), color-mix(in srgb, var(--fg) 14%, var(--bg)) var(--p, 0%)); }
+.form input[type="range"]::-webkit-slider-thumb { -webkit-appearance: none; width: 16px; height: 16px; margin-top: -5px; border-radius: 50%; border: 2px solid var(--bg); background: var(--accent); box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent) 60%, var(--bg)), 0 1px 2px rgb(0 0 0 / 0.25); }
+.form input[type="range"]:focus-visible { outline: none; }
+.form input[type="range"]:focus-visible::-webkit-slider-thumb { box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 35%, transparent), 0 0 0 1px var(--accent); }
+.form input[type="range"]:disabled { cursor: default; }
 .panel[class*="tc-"] .form .range output { color: color-mix(in srgb, var(--tc) 70%, var(--fg)); font-weight: 600; }
 .form label, .form .lbl { display: flex; flex-direction: column; gap: 4px; font-size: 12px; color: var(--muted); }
 .form input[type="text"], .form input[type="number"], .form input[type="date"], .form select, .form textarea { width: 100%; height: 30px; border: 1px solid var(--line); border-radius: 6px; background: var(--bg); padding: 0 8px; color: var(--fg); }

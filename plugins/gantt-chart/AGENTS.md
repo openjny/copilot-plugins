@@ -17,7 +17,7 @@
 - 単体テスト（`extensions/gantt-chart` で）: `node --test test\model.test.mjs test\chart.test.mjs test\i18n.test.mjs test\validate.test.mjs`。`node --test` にディレクトリは渡せないので、ファイルを並べます。
 - 手元で試すときは、インストール済みのコピー（`~/.copilot/installed-plugins/openjny/gantt-chart/extensions/gantt-chart`）に、`node_modules` と `test` を除いて上書きします（`robocopy` の終了コード 1 は成功です）。
 - `assets/` と `lib/locales/` は読み直されるので、リロードは要りません。`lib/*.mjs` と `extension.mjs` を変えたら `extensions_reload` を、上書きとは別の呼び出しで行い、新しい instanceId でキャンバスを開き直します。
-- 画面は Playwright（playwright-core と Edge）で確かめています。再現スクリプトはまだリポジトリに入っていません。`test/ui/` に、ダミーの計画ファイルと一緒に置くのが次の課題です。スクリプトは、サーバー側に残る設定（言語 `locale.json`、画面の `view.json`）を、始めと終わりに初期値へ戻します。戻さないと、次のスクリプトが前の言語で動いて、順番によって失敗します。
+- 画面は Playwright（playwright-core と Edge）で確かめています。再現スクリプトはまだリポジトリに入っていません。`test/ui/` に、ダミーの計画ファイルと一緒に置くのが次の課題です。スクリプトは、サーバー側に残る設定（言語 `locale.json`、画面の `view.json`。`view.json` には一覧の列 `cols` も入り、既定はタスク名だけです）を、始めと終わりに初期値へ戻します。戻さないと、次のスクリプトが前の言語や前の列で動いて、順番によって失敗します。
 
 ## 守ること
 

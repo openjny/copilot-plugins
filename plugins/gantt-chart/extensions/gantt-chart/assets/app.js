@@ -52,10 +52,12 @@ const ICONS = {
   check: 'M5 12l5 5 9-10',
   chevron: 'M6 9l6 6 6-6',
 };
-// Columns of the task list. "#" is always shown; the others open with the list and each has a width the user can drag.
+// Columns of the task list. "#" and the name are always there; the others (OPTIONAL_COLS) are the user's choice, kept
+// with the view settings. Each column has a width the user can drag.
 const COL_NO = 36;
 const COL_WIDTH = { name: { min: 120, max: 600, std: 240 }, dur: { min: 44, max: 140, std: 56 }, res: { min: 56, max: 320, std: 88 } };
 const COL_KEYS = Object.keys(COL_WIDTH);
+const OPTIONAL_COLS = ['dur', 'res'];
 // Room kept for the timeline when the columns are widened.
 const LIST_MARGIN = 160;
 // A list wider than this share of the canvas leaves too little of the chart: the first time it is shown, the name column gives way.
@@ -85,6 +87,8 @@ const app = {
   listFitted: false,
   // Whether the chart shows the names of the tasks next to or on their bars.
   labels: document.documentElement.dataset.labels !== 'off',
+  // The optional list columns that are shown (see OPTIONAL_COLS).
+  cols: new Set((document.documentElement.dataset.cols ?? '').split(',').filter((key) => OPTIONAL_COLS.includes(key))),
   detailOpen: false,
   moreOpen: false,
   editing: null,
@@ -114,8 +118,12 @@ const app = {
 
 const $ = (id) => document.getElementById(id);
 const ui = Object.fromEntries(['start', 'editor', 'topbar', 'toolbar', 'banner', 'scroller', 'grid', 'hl', 'ht', 'bl', 'bt', 'panel', 'psplit', 'splits', 'status', 'project', 'versions', 'confirm', 'toast', 'tip', 'today', 'fit', 'empty', 'ctx', 'suggest'].map((id) => [id, $(id)]));
-/** Width of the task list in the scroller: the row numbers are always there, the rest (name, duration, assignee) is off by default. */
-const listW = () => COL_NO + (app.listOpen ? COL_KEYS.reduce((sum, key) => sum + app.colW[key], 0) * app.listF : 0);
+/** The columns of the list that are shown, left to right (the name, then the optional ones in their fixed order). */
+function colKeys() {
+  return ['name', ...OPTIONAL_COLS.filter((key) => app.cols.has(key))];
+}
+/** Width of the task list in the scroller: the row numbers are always there, the rest (the name and the chosen columns) opens with the list. */
+const listW = () => COL_NO + (app.listOpen ? colKeys().reduce((sum, key) => sum + app.colW[key], 0) * app.listF : 0);
 
 // ---- Language -----------------------------------------------------------------------------------------------------
 
@@ -746,13 +754,13 @@ function setColWidth(key, width) {
 /** Puts the column widths into the grid (the list is one sticky column of the grid; its rows share the same columns). */
 function applyCols() {
   ui.grid.style.setProperty('--leftW', `${listW()}px`);
-  ui.grid.style.setProperty('--cols', app.listOpen ? `${COL_NO}px ${COL_KEYS.map((key) => `${app.colW[key] * app.listF}px`).join(' ')}` : `${COL_NO}px`);
+  ui.grid.style.setProperty('--cols', app.listOpen ? `${COL_NO}px ${colKeys().map((key) => `${app.colW[key] * app.listF}px`).join(' ')}` : `${COL_NO}px`);
 }
 
 /** Moves the drag handles to the right edge of their columns. */
 function placeSplits() {
   let x = COL_NO;
-  for (const key of COL_KEYS) {
+  for (const key of colKeys()) {
     x += app.colW[key];
     const el = ui.splits.querySelector(`[data-key="${key}"]`);
     if (el) el.style.left = `${x - 4}px`;
@@ -772,7 +780,7 @@ function renderSplits() {
   // A state update during a drag must not replace the handle that holds the pointer.
   if (app.colDrag) return placeSplits();
   ui.splits.replaceChildren(
-    ...COL_KEYS.map((key) => {
+    ...colKeys().map((key) => {
       const label = t('col.resize', { name: t(`col.${key}`) });
       const el = h('div', { class: 'split', role: 'separator', 'aria-orientation': 'vertical', tabindex: '0', 'data-key': key, title: label, 'aria-label': label });
       el.addEventListener('pointerdown', (event) => {
@@ -817,7 +825,7 @@ function renderSplits() {
 function fitList() {
   if (app.listFitted || ui.scroller.clientWidth === 0) return;
   app.listFitted = true;
-  const over = COL_NO + COL_KEYS.reduce((sum, key) => sum + app.colW[key], 0) - ui.scroller.clientWidth * LIST_SHARE;
+  const over = COL_NO + colKeys().reduce((sum, key) => sum + app.colW[key], 0) - ui.scroller.clientWidth * LIST_SHARE;
   if (over > 0) app.colW.name = Math.max(COL_WIDTH.name.min, app.colW.name - Math.ceil(over));
 }
 
@@ -1450,9 +1458,38 @@ function growRange() {
 
 function renderLeftHeader() {
   const cell = (text, align) => h('div', align ? { style: { textAlign: align } } : {}, text);
-  // Only the row numbers while the list is folded; the name, duration and assignee columns follow when it is open.
+  // Only the row numbers while the list is folded; the name and the chosen columns follow when it is open.
   if (!app.listOpen) return ui.hl.replaceChildren(h('div', { class: 'cols' }, cell('#', 'center')));
-  ui.hl.replaceChildren(h('div', { class: 'cols' }, cell('#', 'center'), cell(t('col.name')), cell(t('col.dur'), 'right'), cell(t('col.res'))));
+  // The button at the end of the name opens the menu of columns (so does a right-click anywhere on the header).
+  const name = h(
+    'div',
+    { class: 'h-name' },
+    h('span', {}, t('col.name')),
+    h('button', { class: 'btn flat square col-menu', type: 'button', title: t('col.menu'), 'aria-label': t('col.menu'), 'aria-haspopup': 'menu', onclick: (event) => columnsMenu(event.currentTarget) }, icon('sliders')),
+  );
+  ui.hl.replaceChildren(h('div', { class: 'cols' }, cell('#', 'center'), name, ...colKeys().slice(1).map((key) => cell(t(`col.${key}`), key === 'dur' ? 'right' : undefined))));
+}
+
+ui.hl.addEventListener('contextmenu', (event) => {
+  if (app.listOpen) columnsMenu(event);
+});
+
+/** The menu of the columns of the list: the name is always there, the others are switched on and off. */
+function columnsMenu(at) {
+  showMenu(at, [
+    { heading: t('col.menu') },
+    { label: t('col.name'), checked: true, disabled: true, run: () => {} },
+    ...OPTIONAL_COLS.map((key) => ({ label: t(`col.${key}`), checked: app.cols.has(key), run: () => toggleCol(key) })),
+  ]);
+}
+
+/** Shows or hides an optional column. The timeline keeps its place on the screen while the list gets wider or narrower. */
+function toggleCol(key) {
+  const before = listW();
+  if (!app.cols.delete(key)) app.cols.add(key);
+  rememberView({ cols: OPTIONAL_COLS.filter((item) => app.cols.has(item)) });
+  renderChart();
+  ui.scroller.scrollLeft += listW() - before;
 }
 
 function renderTimelineHeader() {
@@ -1562,8 +1599,8 @@ function leftRow(row) {
     { ...attrs, onclick: (event) => clickTask(event, row.id), ondblclick: () => startEdit(row.id) },
     h('div', { class: 'c-no', role: 'gridcell' }, String(row.row), insertButton('before', row), insertButton('after', row)),
     app.listOpen ? h('div', { class: 'c-name', role: 'gridcell', style: { paddingLeft: `${6 + row.level * 16}px` } }, caret, name) : null,
-    app.listOpen ? h('div', { class: 'c-dur', role: 'gridcell' }, formatDuration(row.duration)) : null,
-    app.listOpen ? h('div', { class: 'c-res', role: 'gridcell', title: resources }, resources) : null,
+    app.listOpen && app.cols.has('dur') ? h('div', { class: 'c-dur', role: 'gridcell' }, formatDuration(row.duration)) : null,
+    app.listOpen && app.cols.has('res') ? h('div', { class: 'c-res', role: 'gridcell', title: resources }, resources) : null,
   );
   return el;
 }
@@ -2933,11 +2970,13 @@ function taskForm(row) {
     max: '100',
     step: '1',
     value: String(percent),
+    style: { '--p': `${percent}%` },
     disabled: parent,
     'data-field': 'progress',
     'aria-label': t('panel.progress'),
     oninput: (event) => {
       output.textContent = `${event.target.value}%`;
+      event.target.style.setProperty('--p', `${event.target.value}%`);
     },
     onchange: (event) => commit({ progress: Number(event.target.value) }),
   });

@@ -177,7 +177,7 @@ export default {
   'color.gray': 'Gray',
 
   'tb.aria': 'Task tools',
-  'tb.list': 'Show / hide the name, duration and assignee columns (# is always shown)',
+  'tb.list': 'Show / hide the task list (# is always shown; pick the duration and assignee columns in its column menu)',
   'tb.labels': 'Show / hide the task names on the chart',
   'tb.undo': 'Undo (Ctrl+Z)',
   'tb.undoWith': 'Undo: {label} (Ctrl+Z)',
@@ -254,6 +254,7 @@ export default {
   'list.collapse': 'Fold',
   'list.unnamed': '(no name)',
   'col.name': 'Task name',
+  'col.menu': 'Columns in the list',
   'col.dur': 'Duration',
   'col.res': 'Assignee',
   'ins.above': 'Insert a task above #{row}',
