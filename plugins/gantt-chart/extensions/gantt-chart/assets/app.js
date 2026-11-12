@@ -66,8 +66,8 @@ const app = {
 
 const $ = (id) => document.getElementById(id);
 const ui = Object.fromEntries(['start', 'editor', 'topbar', 'toolbar', 'banner', 'scroller', 'grid', 'hl', 'ht', 'bl', 'bt', 'panel', 'status', 'project', 'versions', 'confirm', 'toast', 'tip'].map((id) => [id, $(id)]));
-// Width of the task list in the scroller; the list is not shown by default.
-const listW = () => (app.listOpen ? app.leftW : 0);
+// Width of the task list in the scroller: the row numbers are always there, the rest (name, duration, assignee) is off by default.
+const listW = () => (app.listOpen ? app.leftW : COLS.no.width);
 
 // ---- DOM helpers --------------------------------------------------------------------------------------------
 
@@ -76,8 +76,12 @@ function h(tag, props = {}, ...children) {
   for (const [key, value] of Object.entries(props)) {
     if (value === undefined || value === null || value === false) continue;
     if (key === 'class') el.className = value;
-    else if (key === 'style') Object.assign(el.style, value);
-    else if (key.startsWith('on')) el.addEventListener(key.slice(2), value);
+    else if (key === 'style') {
+      for (const [name, css] of Object.entries(value)) {
+        if (name.startsWith('--')) el.style.setProperty(name, css);
+        else el.style[name] = css;
+      }
+    } else if (key.startsWith('on')) el.addEventListener(key.slice(2), value);
     else el.setAttribute(key, value === true ? '' : String(value));
   }
   for (const child of children.flat()) {
@@ -386,8 +390,8 @@ function buildToolbar() {
         id: 'tb-list',
         class: 'btn square',
         type: 'button',
-        title: 'タスク一覧の表示 / 非表示',
-        'aria-label': 'タスク一覧の表示 / 非表示',
+        title: 'タスク名・期間・担当の表示 / 非表示（# は常に表示）',
+        'aria-label': 'タスク名・期間・担当の表示 / 非表示',
         onclick: toggleList,
       },
       icon('sidebar'),
@@ -528,20 +532,13 @@ function renderChart() {
   const prev = app.range;
   const fresh = app.view === null;
   app.range = computeRange(rows);
-  ui.grid.classList.toggle('nolist', !app.listOpen);
-  ui.hl.hidden = !app.listOpen;
-  ui.bl.hidden = !app.listOpen;
-  ui.grid.style.setProperty('--leftW', `${app.leftW}px`);
+  ui.grid.style.setProperty('--leftW', `${listW()}px`);
+  ui.grid.style.setProperty('--cols', app.listOpen ? `${COLS.no.width}px 1fr ${COLS.dur.width}px ${COLS.res.width}px` : `${COLS.no.width}px`);
   ui.grid.style.setProperty('--tlW', `${app.range.width}px`);
   updateBodyMin();
   renderTimelineHeader();
-  if (app.listOpen) {
-    renderLeftHeader();
-    renderLeft();
-  } else {
-    ui.hl.replaceChildren();
-    ui.bl.replaceChildren();
-  }
+  renderLeftHeader();
+  renderLeft();
   renderBody();
   const { start, ppd, first } = app.range;
   // The range grew to the left: shift the scroll position so the days in view stay where they were.
@@ -605,6 +602,8 @@ function renderLeftHeader() {
     ui.hl.querySelector('.splitter')?.focus();
   });
   const head = (key) => h('div', COLS[key].align ? { style: { textAlign: COLS[key].align } } : {}, COLS[key].label);
+  // Only the row numbers while the list is folded; the name, duration and assignee columns follow when it is open.
+  if (!app.listOpen) return ui.hl.replaceChildren(h('div', { class: 'cols' }, head('no')));
   ui.hl.replaceChildren(h('div', { class: 'cols' }, head('no'), h('div', {}, 'タスク名'), head('dur'), head('res')), splitter);
 }
 
@@ -682,9 +681,9 @@ function leftRow(row) {
     'div',
     { ...attrs, onclick: (event) => clickTask(event, row.id), ondblclick: () => startEdit(row.id) },
     h('div', { class: 'c-no', role: 'gridcell' }, String(row.row)),
-    h('div', { class: 'c-name', role: 'gridcell', style: { paddingLeft: `${6 + row.level * 16}px` } }, caret, name),
-    h('div', { class: 'c-dur', role: 'gridcell' }, formatDuration(row.duration)),
-    h('div', { class: 'c-res', role: 'gridcell', title: resources }, resources),
+    app.listOpen ? h('div', { class: 'c-name', role: 'gridcell', style: { paddingLeft: `${6 + row.level * 16}px` } }, caret, name) : null,
+    app.listOpen ? h('div', { class: 'c-dur', role: 'gridcell' }, formatDuration(row.duration)) : null,
+    app.listOpen ? h('div', { class: 'c-res', role: 'gridcell', title: resources }, resources) : null,
   );
   return el;
 }
@@ -700,7 +699,7 @@ function renderLeft() {
 
 function startEdit(id) {
   const task = taskById(id);
-  if (!task) return;
+  if (!task || !app.listOpen) return;
   app.editing = id;
   app.editText = task.name;
   renderLeft();
@@ -1145,12 +1144,17 @@ function endMarquee(event) {
 
 // ---- Linking tasks with the mouse ----------------------------------------------------------------------------------
 
-// The arrows at the top and left of the selected bar make this task the successor of the one they are dragged to;
-// the arrows at the bottom and right make it the predecessor.
-const LINK_DIRECTION = { top: 'in', left: 'in', bottom: 'out', right: 'out' };
+// Two arrows sit above and below the selected bar (the sides are left free for resizing). The top one is for
+// a task that comes before this one, the bottom one for a task that comes after it; they differ in color and label.
+const LINK_DIRECTION = { top: 'in', bottom: 'out' };
 const LINK_TITLE = {
-  in: '先行タスクにつなぐ（別のタスクへドラッグ、またはクリックしてからタスクを選ぶ）',
-  out: '後続タスクにつなぐ（別のタスクへドラッグ、またはクリックしてからタスクを選ぶ）',
+  in: '先行タスクにつなぐ（このタスクの前に済ませるタスクへドラッグ、またはクリックしてからタスクを選ぶ）',
+  out: '後続タスクにつなぐ（このタスクの後に始めるタスクへドラッグ、またはクリックしてからタスクを選ぶ）',
+};
+const LINK_TAG = { in: '先行タスクにつなぐ', out: '後続タスクにつなぐ' };
+const LINK_HINT = {
+  in: '先行タスクにするタスクをクリックしてください（Esc で取り消し）',
+  out: '後続タスクにするタスクをクリックしてください（Esc で取り消し）',
 };
 
 function renderConnectors() {
@@ -1159,23 +1163,32 @@ function renderConnectors() {
   const el = row && ui.bt.querySelector(`[data-id="${row.id}"].bar, [data-id="${row.id}"].sbar`);
   if (!el) return;
   // A parent task takes its dates from its children, so it cannot follow another task.
-  const sides = row.summary ? ['bottom', 'right'] : ['top', 'left', 'bottom', 'right'];
+  const sides = row.summary ? ['bottom'] : ['top', 'bottom'];
   ui.bt.append(
     h(
       'div',
-      { class: `conn${app.link ? ' show' : ''}`, style: { left: `${el.offsetLeft}px`, top: `${el.offsetTop}px`, width: `${el.offsetWidth}px`, height: `${el.offsetHeight}px` } },
-      ...sides.map((side) => h('button', { class: `conn-h conn-${side}`, type: 'button', tabindex: '-1', title: LINK_TITLE[LINK_DIRECTION[side]], 'aria-label': LINK_TITLE[LINK_DIRECTION[side]], onpointerdown: (event) => beginLink(event, row, side), onpointermove: updateLink, onpointerup: releaseLink, onpointercancel: cancelLink })),
+      { class: `conn${app.link ? ' show' : ''}`, style: { left: `${el.offsetLeft}px`, top: `${el.offsetTop}px`, width: `${el.offsetWidth}px`, height: `${el.offsetHeight}px`, '--cx': `${el.offsetWidth / 2}px` } },
+      ...sides.flatMap((side) => {
+        const dir = LINK_DIRECTION[side];
+        return [
+          h('button', { class: `conn-h conn-${side} dir-${dir}`, type: 'button', tabindex: '-1', title: LINK_TITLE[dir], 'aria-label': LINK_TITLE[dir], onpointerdown: (event) => beginLink(event, row, side), onpointermove: updateLink, onpointerup: releaseLink, onpointercancel: cancelLink }),
+          h('span', { class: `conn-tag conn-tag-${side} dir-${dir}` }, LINK_TAG[dir]),
+        ];
+      }),
     ),
   );
 }
 
-/** Shows the arrows while the pointer is near the selected bar. */
+/** Shows the arrows while the pointer is on the selected bar or in the gap next to it; they follow the pointer along the bar. */
 function revealConnectors(event) {
   const conn = ui.bt.querySelector('.conn');
   if (!conn || app.drag || app.marquee) return;
+  if (app.link) return conn.classList.add('show');
+  if (event.target.closest?.('.conn-h')) return;
   const box = conn.getBoundingClientRect();
-  const near = event.clientX > box.left - 22 && event.clientX < box.right + 22 && event.clientY > box.top - 20 && event.clientY < box.bottom + 20;
-  conn.classList.toggle('show', near || Boolean(app.link));
+  const near = event.clientX >= box.left && event.clientX <= box.right && event.clientY >= box.top - 10 && event.clientY <= box.bottom + 10;
+  conn.classList.toggle('show', near);
+  if (near) conn.style.setProperty('--cx', `${Math.min(Math.max(event.clientX - box.left, 12), Math.max(box.width - 12, 12))}px`);
 }
 
 function beginLink(event, row, side) {
@@ -1185,15 +1198,17 @@ function beginLink(event, row, side) {
   cancelLink();
   event.currentTarget.setPointerCapture(event.pointerId);
   const el = ui.bt.querySelector(`[data-id="${row.id}"].bar, [data-id="${row.id}"].sbar`);
-  const x = side === 'left' ? el.offsetLeft : side === 'right' ? el.offsetLeft + el.offsetWidth : el.offsetLeft + el.offsetWidth / 2;
-  const y = side === 'top' ? el.offsetTop : side === 'bottom' ? el.offsetTop + el.offsetHeight : el.offsetTop + el.offsetHeight / 2;
+  const conn = ui.bt.querySelector('.conn');
+  const x = el.offsetLeft + (parseFloat(conn.style.getPropertyValue('--cx')) || el.offsetWidth / 2);
+  const y = side === 'top' ? el.offsetTop : el.offsetTop + el.offsetHeight;
+  const dir = LINK_DIRECTION[side];
   const line = svgEl('line', { x1: x, y1: y, x2: x, y2: y });
   const dot = svgEl('circle', { cx: x, cy: y, r: 4 });
-  const svg = svgEl('svg', { class: 'rubber', width: ui.bt.offsetWidth, height: ui.bt.offsetHeight, 'aria-hidden': 'true' });
+  const svg = svgEl('svg', { class: `rubber dir-${dir}`, width: ui.bt.offsetWidth, height: ui.bt.offsetHeight, 'aria-hidden': 'true' });
   svg.append(line, dot);
   ui.bt.append(svg);
-  app.link = { id: row.id, dir: LINK_DIRECTION[side], x0: event.clientX, y0: event.clientY, moved: false, sticky: false, target: null, svg, line, dot };
-  ui.bt.querySelector('.conn')?.classList.add('show');
+  app.link = { id: row.id, dir, x0: event.clientX, y0: event.clientY, moved: false, sticky: false, target: null, svg, line, dot };
+  conn.classList.add('show');
 }
 
 /** Why `targetId` cannot be connected to the task being linked, or '' when it can. */
@@ -1249,7 +1264,7 @@ function releaseLink(event) {
   updateLink(event);
   if (!link.moved) {
     link.sticky = true;
-    toast('つなぎたいタスクをクリックしてください（Esc で取り消し）');
+    toast(LINK_HINT[link.dir]);
     return;
   }
   const over = document.elementsFromPoint(event.clientX, event.clientY).find((el) => el.matches?.('.bar, .sbar'));
@@ -1556,7 +1571,7 @@ ui.bl.addEventListener('keydown', (event) => {
     case 'End': go(app.visible.length - 1); break;
     case 'ArrowLeft': if (row?.summary && !taskById(row.id).collapsed) send([{ op: 'update', id: row.id, collapsed: true }]); break;
     case 'ArrowRight': if (row?.summary && taskById(row.id).collapsed) send([{ op: 'update', id: row.id, collapsed: false }]); break;
-    case 'Enter': case 'F2': if (row) startEdit(row.id); break;
+    case 'Enter': case 'F2': if (row) (app.listOpen ? startEdit(row.id) : showDetail(row.id)); break;
     case 'Delete': onDelete(); break;
     default: return;
   }

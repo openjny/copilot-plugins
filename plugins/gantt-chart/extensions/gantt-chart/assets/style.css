@@ -84,8 +84,6 @@ button, input, select, textarea { font: inherit; color: inherit; }
 /* Grid: the task table on the left and the timeline on the right scroll together */
 .scroller { position: relative; flex: 1; min-width: 0; overflow: auto; }
 .grid { display: grid; grid-template-columns: var(--leftW, 360px) var(--tlW, 1200px); width: calc(var(--leftW, 360px) + var(--tlW, 1200px)); }
-/* The task list is off by default: the timeline alone fills the width */
-.grid.nolist { grid-template-columns: var(--tlW, 1200px); width: var(--tlW, 1200px); }
 .hl, .ht { position: sticky; top: 0; height: var(--head-h); background: var(--head); border-bottom: 1px solid var(--line); }
 .hl { left: 0; z-index: 6; }
 .ht { z-index: 4; }
@@ -124,19 +122,28 @@ button, input, select, textarea { font: inherit; color: inherit; }
 .rowsel { position: absolute; left: 0; right: 0; height: var(--row-h); background: var(--sel); opacity: 0.7; pointer-events: none; }
 .marquee { position: absolute; border: 1px solid var(--accent); background: color-mix(in srgb, var(--accent) 14%, transparent); pointer-events: none; z-index: 6; }
 
-/* Arrows around the selected bar start a dependency (see renderConnectors) */
-.conn { position: absolute; z-index: 6; pointer-events: none; }
-.conn-h { position: absolute; padding: 0; border: 0; background: var(--accent); opacity: 0; pointer-events: none; cursor: crosshair; transition: opacity 0.12s; }
-.conn.show .conn-h { opacity: 0.45; pointer-events: auto; }
+/* Arrows above and below the selected bar start a dependency (see renderConnectors): the top one for a task that
+   comes before (orange), the bottom one for a task that comes after (blue). They follow the pointer along the bar. */
+.conn { position: absolute; z-index: 6; pointer-events: none; --conn-in: light-dark(#d9730d, #f2a14b); --conn-out: var(--accent); }
+.conn-h { position: absolute; width: 26px; height: 15px; left: calc(var(--cx, 50%) - 13px); padding: 0; border: 0; opacity: 0; pointer-events: none; cursor: crosshair; transition: opacity 0.12s; }
+.conn-h.dir-in { background: var(--conn-in); }
+.conn-h.dir-out { background: var(--conn-out); }
+.conn.show .conn-h { opacity: 0.5; pointer-events: auto; }
 .conn.show .conn-h:hover { opacity: 0.95; }
-.conn-top { width: 16px; height: 9px; left: calc(50% - 8px); top: -10px; clip-path: polygon(50% 0, 100% 100%, 0 100%); }
-.conn-bottom { width: 16px; height: 9px; left: calc(50% - 8px); top: calc(100% + 1px); clip-path: polygon(0 0, 100% 0, 50% 100%); }
-.conn-left { width: 9px; height: 16px; left: -11px; top: calc(50% - 8px); clip-path: polygon(0 50%, 100% 0, 100% 100%); }
-.conn-right { width: 9px; height: 16px; left: calc(100% + 2px); top: calc(50% - 8px); clip-path: polygon(0 0, 100% 50%, 0 100%); }
+.conn-top { top: -21px; clip-path: polygon(50% 0, 100% 100%, 0 100%); }
+.conn-bottom { top: calc(100% + 6px); clip-path: polygon(0 0, 100% 0, 50% 100%); }
+.conn-tag { position: absolute; left: calc(var(--cx, 50%) + 18px); display: none; height: 18px; padding: 0 7px; border-radius: 4px; font-size: 11px; line-height: 18px; white-space: nowrap; color: #fff; pointer-events: none; z-index: 1; }
+.conn-tag.dir-in { background: var(--conn-in); }
+.conn-tag.dir-out { background: var(--conn-out); }
+.conn-tag.conn-tag-top { top: -22px; }
+.conn-tag.conn-tag-bottom { top: calc(100% + 5px); }
+.conn.show .conn-h:hover + .conn-tag { display: block; }
 .busy .conn { display: none; }
-.rubber { position: absolute; left: 0; top: 0; pointer-events: none; z-index: 7; }
+.rubber { position: absolute; left: 0; top: 0; pointer-events: none; z-index: 7; --conn-in: light-dark(#d9730d, #f2a14b); }
 .rubber line { stroke: var(--accent); stroke-width: 2; stroke-dasharray: 5 4; }
 .rubber circle { fill: var(--accent); }
+.rubber.dir-in line { stroke: var(--conn-in); }
+.rubber.dir-in circle { fill: var(--conn-in); }
 .bar.link-ok, .sbar.link-ok { outline: 2px solid var(--accent); outline-offset: 1px; }
 .bar.link-bad, .sbar.link-bad { outline: 2px dashed var(--danger); outline-offset: 1px; opacity: 0.6; }
 .picked { margin: 0; padding: 0 12px 12px 30px; font-size: 12px; color: var(--fg); columns: 3 220px; }
@@ -176,7 +183,7 @@ button, input, select, textarea { font: inherit; color: inherit; }
 .links.focus path.link.rel { opacity: 1; stroke: var(--accent); stroke-width: 1.8; }
 
 /* Detail panel: under the timeline, opened by clicking a task */
-.panel { flex: none; height: clamp(220px, 40vh, 380px); display: flex; flex-direction: column; border-top: 1px solid var(--line); background: var(--bg); }
+.panel { flex: none; height: clamp(140px, 24vh, 240px); display: flex; flex-direction: column; border-top: 1px solid var(--line); background: var(--bg); }
 .ph { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 3px 6px 3px 12px; border-bottom: 1px solid var(--line); background: var(--head); }
 .pt { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .pbody { flex: 1; min-height: 0; overflow: auto; }
