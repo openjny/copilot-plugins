@@ -104,6 +104,7 @@ button, input, select, textarea { font: inherit; color: inherit; }
 
 /* Grid: the task table on the left and the timeline on the right scroll together */
 .scroller { position: relative; flex: 1; min-width: 0; overflow: auto; }
+.scroller.panning, .scroller.panning * { cursor: grabbing !important; }
 .grid { display: grid; grid-template-columns: var(--leftW, 360px) var(--tlW, 1200px); width: calc(var(--leftW, 360px) + var(--tlW, 1200px)); }
 .hl, .ht { position: sticky; top: 0; height: var(--head-h); background: var(--head); border-bottom: 1px solid var(--line); }
 .hl { left: 0; z-index: 6; border-right: 1px solid var(--edge); box-shadow: var(--edge-shadow); }
@@ -253,11 +254,9 @@ button, input, select, textarea { font: inherit; color: inherit; }
 .area.c-purple { --area: var(--c-purple-fill); }
 .area.c-pink { --area: var(--c-pink-fill); }
 .area.c-gray { --area: var(--c-gray-fill); }
-.sbar { position: absolute; height: var(--sbar-h, 7px); background: var(--sum); border-radius: 1px; z-index: 2; cursor: pointer; }
-/* The ends of a parent bar are right triangles hanging from it, with the straight side outward: |/ on the left and \| on the right */
-.sbar::before, .sbar::after { content: ""; position: absolute; top: var(--sbar-h, 7px); width: 0; height: 0; border-top: calc(var(--sbar-h, 7px) * 0.85) solid var(--sum); }
-.sbar::before { left: 0; border-right: calc(var(--sbar-h, 7px) * 0.8) solid transparent; }
-.sbar::after { right: 0; border-left: calc(var(--sbar-h, 7px) * 0.8) solid transparent; }
+/* A parent is a bar (--sbar-h thick) with a triangle on each end that sticks out above and below it (--sbar-ov), pointing outward: <==> with the tips on the first and last day. The box is the whole shape, the drawing is clipped. */
+.sbar { position: absolute; height: calc(var(--sbar-h, 8px) + 2 * var(--sbar-ov, 3px)); --sw: min(var(--sbar-w, 8px), 50%); z-index: 2; cursor: pointer; }
+.sbar::before { content: ""; position: absolute; inset: 0; background: var(--sum); clip-path: polygon(0 50%, var(--sw) 0, var(--sw) var(--sbar-ov, 3px), calc(100% - var(--sw)) var(--sbar-ov, 3px), calc(100% - var(--sw)) 0, 100% 50%, calc(100% - var(--sw)) 100%, calc(100% - var(--sw)) calc(100% - var(--sbar-ov, 3px)), var(--sw) calc(100% - var(--sbar-ov, 3px)), var(--sw) 100%); }
 .sbar.c-blue { --sum: var(--c-blue-fill); }
 .sbar.c-green { --sum: var(--c-green-fill); }
 .sbar.c-orange { --sum: var(--c-orange-fill); }

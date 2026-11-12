@@ -1323,10 +1323,12 @@ function monthSegments(start, end) {
   return segments;
 }
 
-/** Sizes of a parent task's bar (thickness, the notch under each end) and its label, for the current row height. */
+/** Sizes of a parent task's bar (thickness), how far the triangle on each end sticks out above and below it, its width, and the label; for the current row height. */
 function summarySize() {
-  const bar = Math.max(6, Math.round(ROW_H * 0.25));
-  return { bar, notch: Math.round(bar * 0.85), label: clamp(Math.round(BAR_H * 0.6), 10, 14) + 3 };
+  const bar = Math.max(6, Math.round(ROW_H * 0.28));
+  const over = Math.max(2, Math.round(bar * 0.3));
+  const height = bar + 2 * over;
+  return { bar, over, height, wide: Math.round(height * 0.7), label: clamp(Math.round(BAR_H * 0.6), 10, 14) + 3 };
 }
 
 /** Fills the scroller with grid lines even when there are few rows. */
@@ -1352,6 +1354,8 @@ function renderChart() {
   ui.grid.style.setProperty('--bar-fs', `${clamp(Math.round(BAR_H * 0.6), 10, 14)}px`);
   const sum = summarySize();
   ui.grid.style.setProperty('--sbar-h', `${sum.bar}px`);
+  ui.grid.style.setProperty('--sbar-ov', `${sum.over}px`);
+  ui.grid.style.setProperty('--sbar-w', `${sum.wide}px`);
   ui.grid.style.setProperty('--sum-lh', `${sum.label}px`);
   applyCols();
   ui.grid.style.setProperty('--tlW', `${app.range.width}px`);
@@ -1591,16 +1595,16 @@ function renderBody() {
     const lateTag = () => (lateDays ? h('span', { class: 'late-tag' }, t('due.tag', { count: lateDays })) : null);
     if (dueDay !== null) parts.push(h('div', { class: `due${late}`, 'data-due': row.id, title: t('due.marker', { date: task.due }), style: { left: `${(dueDay - start + 1) * ppd - 1}px`, top: `${top + 2}px`, height: `${ROW_H - 4}px` } }));
     if (row.summary) {
-      // A parent is a bar with a notch at each end and, when the names are shown, its name on top.
-      // Everything grows with the row height, and the block is centered in the row.
-      const { bar: sb, notch, label: lh } = summarySize();
-      const block = (named ? lh : 0) + sb + notch;
+      // A parent is a bar with a triangle on each end and, when the names are shown, its name on top: the name starts
+      // after the left triangle, so that triangle can stick up beside it. The block is centered in the row.
+      const { bar, over, height: sb, wide, label: lh } = summarySize();
+      const block = named ? lh + bar + over : sb;
       const y = top + Math.max(0, Math.round((ROW_H - block) / 2));
-      const sbar = h('div', { class: `sbar c-${colorOf(row)}${selected ? ' sel' : ''}${late}`, 'data-id': row.id, role: 'img', 'aria-label': label, title: label, style: { left: `${left}px`, width: `${width}px`, top: `${y + (named ? lh : 0)}px` } });
+      const sbar = h('div', { class: `sbar c-${colorOf(row)}${selected ? ' sel' : ''}${late}`, 'data-id': row.id, role: 'img', 'aria-label': label, title: label, style: { left: `${left}px`, width: `${width}px`, top: `${y + (named ? lh - over : 0)}px` } });
       wireBar(sbar, row);
       parts.push(sbar);
       // A folded parent shows ▸ before its name: with the list hidden this is the only sign that tasks are tucked away under it.
-      if (named) parts.push(h('div', { class: `sum-label tc-${colorOf(row)}`, style: { left: `${left}px`, top: `${y}px` } }, `${task.collapsed ? '▸ ' : ''}${task.name}  ${percent}%`, lateTag()));
+      if (named) parts.push(h('div', { class: `sum-label tc-${colorOf(row)}`, style: { left: `${left + Math.min(wide, width / 2)}px`, top: `${y}px` } }, `${task.collapsed ? '▸ ' : ''}${task.name}  ${percent}%`, lateTag()));
       else parts.push(h('div', { class: `after-label tc-${colorOf(row)}`, style: { left: `${left + width}px`, top: `${top + 5}px` } }, `${percent}%`, lateTag()));
       continue;
     }
@@ -2141,6 +2145,60 @@ async function endDrag(event) {
   }
   growRange();
 }
+
+// ---- Panning with the right button ---------------------------------------------------------------------------------
+
+/**
+ * Dragging with the right button moves the view in both directions. The pointer is captured only once it has moved,
+ * so a plain right-click keeps its target; the menu that comes with the button release is dropped after a pan.
+ */
+const PAN_SLOP = 4;
+let pan = null;
+let panned = false;
+
+ui.scroller.addEventListener('pointerdown', (event) => {
+  panned = false;
+  if (event.button !== 2 || !(ui.bt.contains(event.target) || ui.ht.contains(event.target)) || app.drag || app.marquee || app.link) return;
+  pan = { id: event.pointerId, x0: event.clientX, y0: event.clientY, x: event.clientX, y: event.clientY, moved: false };
+});
+
+ui.scroller.addEventListener('pointermove', (event) => {
+  if (!pan || event.pointerId !== pan.id) return;
+  if (!(event.buttons & 2)) return endPan();
+  if (!pan.moved) {
+    if (Math.hypot(event.clientX - pan.x0, event.clientY - pan.y0) < PAN_SLOP) return;
+    pan.moved = true;
+    hideMenu();
+    ui.scroller.setPointerCapture(event.pointerId);
+    ui.scroller.classList.add('panning');
+  }
+  // Relative steps: the chart can grow at its left end while panning, which moves scrollLeft by itself.
+  ui.scroller.scrollLeft += pan.x - event.clientX;
+  ui.scroller.scrollTop += pan.y - event.clientY;
+  pan.x = event.clientX;
+  pan.y = event.clientY;
+});
+
+function endPan() {
+  if (!pan) return;
+  panned = pan.moved;
+  if (pan.moved && ui.scroller.hasPointerCapture(pan.id)) ui.scroller.releasePointerCapture(pan.id);
+  ui.scroller.classList.remove('panning');
+  pan = null;
+}
+
+ui.scroller.addEventListener('pointerup', (event) => event.button === 2 && endPan());
+ui.scroller.addEventListener('pointercancel', endPan);
+ui.scroller.addEventListener(
+  'contextmenu',
+  (event) => {
+    if (!panned && !pan?.moved) return;
+    panned = false;
+    event.preventDefault();
+    event.stopPropagation();
+  },
+  true,
+);
 
 // ---- Selecting with a rectangle ------------------------------------------------------------------------------------
 
