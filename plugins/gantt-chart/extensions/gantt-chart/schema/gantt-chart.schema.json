@@ -67,10 +67,10 @@
       "type": "object",
       "required": ["task"],
       "additionalProperties": false,
-      "description": "The task starts after the next working day after the predecessor's end, plus lag working days.",
+      "description": "The task cannot start before the next working day after the predecessor's end, plus lag working days: a predecessor only pushes the task later, it never pulls it earlier.",
       "properties": {
         "task": { "$ref": "#/$defs/id" },
-        "lag": { "type": "integer", "minimum": 0, "maximum": 999, "default": 0, "description": "Working days to wait (0 or more: a task cannot start before its predecessors end)." }
+        "lag": { "type": "integer", "minimum": 0, "maximum": 999, "default": 0, "description": "Working days to keep between the end of the predecessor and the start of the task (0 or more: a task cannot start before its predecessors end)." }
       }
     },
     "task": {
@@ -87,7 +87,7 @@
       "properties": {
         "id": { "$ref": "#/$defs/id" },
         "name": { "$ref": "#/$defs/name" },
-        "start": { "$ref": "#/$defs/date", "description": "Start day. A task with predecessors starts after them whatever this says, so keep it as the day it starts." },
+        "start": { "$ref": "#/$defs/date", "description": "The day the task starts. If its predecessors end later, it starts on the first day they allow instead (and this is rewritten to that day)." },
         "duration": { "type": "integer", "minimum": 1, "maximum": 3650, "description": "Working days." },
         "progress": { "type": "integer", "minimum": 0, "maximum": 100, "default": 0, "description": "Percent complete." },
         "milestone": { "type": "boolean", "default": false, "description": "A point in time shown as a diamond; its duration is 1." },
@@ -95,6 +95,7 @@
         "resources": { "$ref": "#/$defs/resources" },
         "color": { "$ref": "#/$defs/color" },
         "predecessors": { "type": "array", "maxItems": 50, "items": { "$ref": "#/$defs/dependency" } },
+        "due": { "$ref": "#/$defs/date", "description": "Deadline. The task is marked late when it ends after this day." },
         "note": { "$ref": "#/$defs/note" }
       },
       "if": { "required": ["milestone"], "properties": { "milestone": { "const": true } } },
@@ -110,6 +111,7 @@
         "collapsed": { "type": "boolean", "default": false, "description": "Hide the children in the list." },
         "resources": { "$ref": "#/$defs/resources" },
         "color": { "$ref": "#/$defs/color" },
+        "due": { "$ref": "#/$defs/date", "description": "Deadline. The parent is marked late when its last child ends after this day." },
         "note": { "$ref": "#/$defs/note" },
         "children": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/task" } }
       }

@@ -104,8 +104,8 @@ export async function startServer(chart, { log }) {
       if (origin !== undefined && !allowedHosts.some((host) => origin === `http://${host}`)) return sendJson(res, 403, errorBody('forbidden', 'err.badOrigin'));
       const body = await readJson(req);
       if (url.pathname === '/api/ops') {
-        const { results } = await chart.mutate(body.ops);
-        return sendJson(res, 200, { ok: true, results, state: chart.clientState() });
+        const { results, shifted } = await chart.mutate(body.ops);
+        return sendJson(res, 200, { ok: true, results, shifted, state: chart.clientState() });
       }
       if (url.pathname === '/api/undo' || url.pathname === '/api/redo') {
         const { label } = await chart.step(url.pathname === '/api/undo' ? 'undo' : 'redo');

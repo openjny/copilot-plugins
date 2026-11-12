@@ -48,6 +48,7 @@ function flatten(nodes, level, out, where, ids) {
     if (node.resources !== undefined) task.resources = node.resources;
     if (node.color !== undefined) task.color = node.color;
     if (node.note !== undefined) task.note = node.note;
+    if (node.due !== undefined) task.due = node.due;
     if (node.collapsed !== undefined) task.collapsed = node.collapsed;
     if (node.predecessors !== undefined) {
       const seen = new Set();
@@ -105,6 +106,7 @@ export function toTree(tasks) {
     if (task.color !== 'inherit') node.color = task.color;
     if (!parent && task.predecessors.length) node.predecessors = task.predecessors.map((pred) => (pred.lag ? { task: pred.task, lag: pred.lag } : { task: pred.task }));
     if (task.note) node.note = task.note;
+    if (task.due) node.due = task.due;
     if (parent) {
       if (task.collapsed) node.collapsed = true;
       node.children = [];

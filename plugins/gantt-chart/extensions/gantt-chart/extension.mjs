@@ -68,7 +68,8 @@ function chartView(chart, extra = {}) {
 const idProperty = { type: 'string', description: 'Task id, as listed by get_chart (letters, digits, "_" and "-", up to 32 characters).' };
 const taskFields = {
   name: { type: 'string', description: 'Task name. For "project" and "save_version" it is the project or version name.' },
-  start: { type: 'string', description: 'Start date, YYYY-MM-DD. A weekend or holiday moves to the next working day. For a task with predecessors the start follows them, so this changes their lags; a date before the predecessors end becomes the first day they allow, and the op result reports it in "adjusted.start".' },
+  start: { type: 'string', description: 'The day the task is placed, YYYY-MM-DD (a weekend or holiday moves to the next working day). Predecessors only set the earliest day it may start: a date before they allow becomes the first day they allow (the op result reports it in "adjusted.start"), and a later date is kept (the gap stays; lags are not changed). A new task given predecessors and no start is placed right after them.' },
+  due: { type: ['string', 'null'], description: 'Deadline, YYYY-MM-DD; null clears it. A task that ends after it is reported with lateDays (and marked late on the page).' },
   end: { type: 'string', description: 'Last day, YYYY-MM-DD; sets the duration. Do not combine with duration.' },
   duration: { type: ['integer', 'string'], description: 'Working days: 3, "3d" or "2w" (a week is 5 working days). Do not combine with end.' },
   progress: { type: 'number', minimum: 0, maximum: 100, description: 'Percent complete. Not for a parent task: it is computed from its children.' },
@@ -80,8 +81,8 @@ const taskFields = {
   collapsed: { type: 'boolean', description: 'Collapse a parent task in the list.' },
   predecessors: {
     type: 'array',
-    description: 'Replaces the predecessors. The task starts after the latest of them: the next working day after its end, plus lag working days.',
-    items: { type: 'object', properties: { task: idProperty, lag: { type: 'integer', minimum: 0, maximum: MAX_LAG, description: 'Working days added after the next working day of the predecessor end (0 or more; a task cannot start before its predecessors end). Default 0.' } }, required: ['task'], additionalProperties: false },
+    description: 'Replaces the predecessors. The task cannot start before the latest of them allows: the next working day after its end, plus lag working days. Predecessors only push a task later, they never pull it earlier, so shortening or removing one leaves the task where it is (use the tighten op to close the gap).',
+    items: { type: 'object', properties: { task: idProperty, lag: { type: 'integer', minimum: 0, maximum: MAX_LAG, description: 'Working days to keep after the next working day of the predecessor end (0 or more; a task cannot start before its predecessors end). Default 0.' } }, required: ['task'], additionalProperties: false },
   },
 };
 const opSchema = {
@@ -89,7 +90,8 @@ const opSchema = {
   properties: {
     op: { type: 'string', enum: OPS },
     id: { ...idProperty, description: 'add: an id for the new task (optional, generated if omitted). Other ops: the task (or, for restore_version and delete_version, the version) to act on.' },
-    ids: { type: 'array', minItems: 1, maxItems: 500, items: idProperty, description: 'slide: the tasks to move together (a parent stands for its children).' },
+    ids: { type: 'array', minItems: 1, maxItems: 500, items: idProperty, description: 'slide / tighten: the tasks to act on (a parent stands for its children).' },
+    reconnect: { type: 'boolean', description: 'delete: also connect what waited for the deleted task to what the deleted task waited for, keeping the gap between them (not for a task with children).' },
     days: { type: 'integer', minimum: -2600, maximum: 2600, description: 'slide: working days to move the tasks by (negative = earlier), keeping their positions relative to each other. A move that would start a task before its predecessors end is cut down to the most that works; the op result reports it in "adjusted.days".' },
     parent: { ...idProperty, description: 'add / move: place as the last child of this task.' },
     after: { ...idProperty, description: 'add / move: place right after this task and its children, at the same level.' },
@@ -139,7 +141,7 @@ const ganttChart = createCanvas({
     },
     {
       name: 'edit_chart',
-      description: 'Apply one or more edits to the chart, all or nothing, and save the file. The page updates at once, and the user can undo the edit there. Returns one result per op (the id of an added task) and the resulting chart. Parent tasks (tasks with children) take their dates and progress from their children. Durations count working days (Saturdays, Sundays and project holidays are off).',
+      description: 'Apply one or more edits to the chart, all or nothing, and save the file. The page updates at once, and the user can undo the edit there. Returns one result per op (the id of an added task), the resulting chart, and when the edit pushed other tasks later because of their dependencies, \"shifted\" (those tasks, with the working days they moved) and when a task became a parent and lost its predecessors, \"dropped\". Parent tasks (tasks with children) take their dates and progress from their children. Durations count working days (Saturdays, Sundays and project holidays are off).',
       inputSchema: {
         type: 'object',
         properties: {
@@ -147,7 +149,7 @@ const ganttChart = createCanvas({
             type: 'array',
             minItems: 1,
             maxItems: 200,
-            description: 'Edits, applied in order. add {name, parent|after|before, start, end|duration, progress, milestone, effort, resources, color, predecessors, id}; update {id, ...fields}; delete {id} (with its children); duplicate {id} (copies a task with its children right after it; the result has "copy", the id of the new task); move {id, parent|after|before}; indent/outdent {id}; shift {id, direction}; slide {ids, days} moves tasks together by working days; project {name, holidays}; save_version {name} saves a version; restore_version {id}; delete_version {id}.',
+            description: 'Edits, applied in order. add {name, parent|after|before, start, end|duration, progress, milestone, effort, resources, color, predecessors, id}; update {id, ...fields}; delete {id, reconnect} (with its children; reconnect joins the tasks before and after it); tighten {ids} starts tasks on the first day their predecessors allow, closing gaps (the result has \"count\"); duplicate {id} (copies a task with its children right after it; the result has "copy", the id of the new task); move {id, parent|after|before}; indent/outdent {id}; shift {id, direction}; slide {ids, days} moves tasks together by working days; project {name, holidays}; save_version {name} saves a version; restore_version {id}; delete_version {id}.',
             items: opSchema,
           },
         },
@@ -158,8 +160,8 @@ const ganttChart = createCanvas({
         const input = asObject(ctx.input);
         const chart = charts.get(ctx.instanceId);
         if (!chart?.file) throw noFileOpen();
-        const { results } = await chart.mutate(input.ops);
-        return { results, ...chartView(chart) };
+        const { results, shifted, dropped } = await chart.mutate(input.ops);
+        return { results, ...(shifted.length && { shifted: shifted.slice(0, 50), shiftedCount: shifted.length }), ...(dropped.length && { dropped }), ...chartView(chart) };
       }),
     },
     {

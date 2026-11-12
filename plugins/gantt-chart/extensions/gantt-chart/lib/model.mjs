@@ -14,7 +14,7 @@ export const MAX_TASKS = 2000;
 export const MAX_DURATION = 3650;
 export const MAX_LAG = 999;
 export const ID_RE = /^[A-Za-z0-9_-]{1,32}$/;
-const TASK_FIELDS = ['name', 'start', 'duration', 'progress', 'effort', 'resources', 'color', 'note', 'collapsed', 'milestone', 'predecessors'];
+const TASK_FIELDS = ['name', 'start', 'duration', 'progress', 'effort', 'resources', 'color', 'note', 'collapsed', 'milestone', 'predecessors', 'due'];
 
 /** An error with a code for programs and a message in the current language (key and params let a caller say it again). */
 export class ModelError extends Error {
@@ -140,6 +140,9 @@ const FIELD = {
   end(value, what) {
     return FIELD.start(value, what);
   },
+  due(value, what) {
+    return value === null ? null : FIELD.start(value, what);
+  },
   duration(value, what) {
     const days = parseDuration(value);
     if (days === null) bad(what, 'expect.duration', { max: MAX_DURATION });
@@ -212,6 +215,7 @@ export const blankTask = (id) => ({
   note: '',
   collapsed: false,
   milestone: false,
+  due: null,
 });
 
 export function emptyDoc(name = '') {
@@ -258,8 +262,9 @@ export function finalize(doc, code = 'invalid_input') {
 // ---- Scheduling ---------------------------------------------------------------------------------------------
 
 /**
- * Computes every task's dates. A task with predecessors starts after the latest of them (end + 1 working
- * day + lag); a parent spans its children and its progress is weighted by their durations.
+ * Computes every task's dates. A task starts on the day it is placed ("start") or, when its predecessors end later,
+ * on the first day they allow (end + 1 working day + lag): predecessors only push a task later, they never pull it
+ * earlier. A parent spans its children and its progress is weighted by their durations.
  */
 export function schedule(doc, cal = makeCalendar(doc.project)) {
   const tasks = doc.tasks;
@@ -291,14 +296,11 @@ export function schedule(doc, cal = makeCalendar(doc.project)) {
       row = { summary: true, milestone: false, startDay, endDay, duration: cal.count(startDay, endDay), progress: work ? done / work : 0, effort, work, done };
     } else {
       let startDay = cal.next(parseDate(task.start));
-      if (task.predecessors.length) {
-        startDay = null;
-        for (const pred of task.predecessors) {
-          const at = index.get(pred.task);
-          if (at === undefined) fail('invalid_input', 'err.missingPred', { name: task.name, task: pred.task });
-          const candidate = cal.add(resolve(at).endDay, 1 + pred.lag);
-          if (startDay === null || candidate > startDay) startDay = candidate;
-        }
+      for (const pred of task.predecessors) {
+        const at = index.get(pred.task);
+        if (at === undefined) fail('invalid_input', 'err.missingPred', { name: task.name, task: pred.task });
+        const candidate = cal.add(resolve(at).endDay, 1 + pred.lag);
+        if (candidate > startDay) startDay = candidate;
       }
       row = {
         summary: false,
@@ -396,29 +398,16 @@ function shiftLevels(tasks, from, to, delta) {
 }
 
 /**
- * Moves the start of a leaf task to `wanted` (a working day). A task with predecessors follows them, so
- * moving it means changing their lags; a start before they end becomes the first day they allow, and
- * that is reported as { start } (null when the start is as asked).
+ * Places a leaf task so that it starts on `wanted` (a working day). Its predecessors only set the earliest day it may
+ * start: a start before they end becomes the first day they allow, and that is reported as { start } (null when the
+ * start is as asked). Lags are not touched.
  */
 function setStart(d, i, wanted, cal) {
   const task = d.tasks[i];
-  if (!task.predecessors.length) {
-    task.start = formatDate(wanted);
-    return null;
-  }
-  const plan = schedule(d, cal);
-  const earliest = Math.max(...task.predecessors.map((pred) => cal.add(plan.byId.get(pred.task).endDay, 1)));
-  const target = Math.max(wanted, earliest);
-  const delta = cal.diff(plan.rows[i].startDay, target);
-  if (delta) {
-    // A predecessor that does not decide the start would go below 0; it stays at 0 and still ends before the start.
-    task.predecessors = task.predecessors.map((pred) => {
-      const lag = Math.max(0, pred.lag + delta);
-      if (lag > MAX_LAG) fail('invalid_input', 'err.lagOver', { max: MAX_LAG });
-      return { task: pred.task, lag };
-    });
-  }
-  return target > wanted ? { start: formatDate(target) } : null;
+  task.start = formatDate(wanted);
+  if (!task.predecessors.length) return null;
+  const first = schedule(d, cal).rows[i].startDay;
+  return first > wanted ? { start: formatDate(first) } : null;
 }
 
 // ---- Sliding several tasks together -----------------------------------------------------------------------------
@@ -507,7 +496,7 @@ function slideTasks(d, ids, days, cal) {
     work = ok ? trySlide(d, slide, sign * ok, cal) : null;
   }
   if (work) d.tasks = work.tasks;
-  return sign * moved;
+  return moved ? sign * moved : 0;
 }
 
 function patchTask(d, i, patch, cal) {
@@ -516,7 +505,7 @@ function patchTask(d, i, patch, cal) {
   const derived = ['start', 'end', 'duration', 'progress', 'effort', 'predecessors'].filter((key) => patch[key] !== undefined);
   if (patch.milestone === true) derived.push('milestone');
   if (derived.length && isSummary(d.tasks, i)) fail('summary_field', 'err.summaryField', { name: task.name, fields: derived.join(', ') });
-  for (const key of ['name', 'resources', 'color', 'note', 'collapsed', 'milestone', 'progress', 'effort']) if (patch[key] !== undefined) task[key] = patch[key];
+  for (const key of ['name', 'resources', 'color', 'note', 'collapsed', 'milestone', 'progress', 'effort', 'due']) if (patch[key] !== undefined) task[key] = patch[key];
   // A milestone is a point in time: one working day.
   if (task.milestone && ((patch.duration !== undefined && patch.duration !== 1) || patch.end !== undefined)) fail('invalid_input', 'err.milestoneDuration', { name: task.name });
   if (patch.milestone === true) task.duration = 1;
@@ -564,7 +553,7 @@ function saveVersion(d, name, now) {
   return version;
 }
 
-export const OPS = ['add', 'update', 'delete', 'duplicate', 'move', 'indent', 'outdent', 'shift', 'slide', 'project', 'save_version', 'restore_version', 'delete_version'];
+export const OPS = ['add', 'update', 'delete', 'duplicate', 'move', 'indent', 'outdent', 'shift', 'slide', 'tighten', 'project', 'save_version', 'restore_version', 'delete_version'];
 
 function runOp(d, op, ctx) {
   if (!isObject(op) || typeof op.op !== 'string') fail('invalid_input', 'err.opShape');
@@ -587,6 +576,8 @@ function runOp(d, op, ctx) {
       task.level = at.level;
       const above = at.index > 0 ? schedule(d, cal).rows[at.index - 1] : null;
       task.start = formatDate(above ? above.startDay : cal.next(todayDay(now)));
+      // A new task that is given predecessors and no start is placed right after them.
+      if (patch.predecessors?.length && patch.start === undefined) task.start = formatDate(FIRST_DAY);
       d.tasks.splice(at.index, 0, task);
       const adjusted = patchTask(d, at.index, patch, cal);
       return { op: 'add', id, ...(adjusted && { adjusted }) };
@@ -604,12 +595,45 @@ function runOp(d, op, ctx) {
       return { op: 'slide', ids: op.ids, days: moved, ...(moved !== op.days && { adjusted: { days: moved } }) };
     }
     case 'delete': {
-      allowKeys(op, ['op', 'id']);
+      allowKeys(op, ['op', 'id', 'reconnect']);
       const i = findIndex(d, op.id, 'id');
+      if (op.reconnect !== undefined && typeof op.reconnect !== 'boolean') bad('reconnect', 'expect.boolean');
+      if (op.reconnect && subtreeEnd(d.tasks, i) > i + 1) fail('invalid_input', 'err.reconnectParent', { name: d.tasks[i].name });
+      const gone0 = d.tasks[i];
+      let reconnected = 0;
+      if (op.reconnect) {
+        // What waited for the deleted task now waits for what it waited for, with the gap the two links added up to.
+        for (const task of d.tasks) {
+          const link = task.predecessors.find((pred) => pred.task === gone0.id);
+          if (!link) continue;
+          const have = new Set(task.predecessors.map((pred) => pred.task));
+          const bridged = gone0.predecessors.filter((pred) => !have.has(pred.task)).map((pred) => ({ task: pred.task, lag: Math.min(MAX_LAG, pred.lag + gone0.duration + link.lag) }));
+          task.predecessors = [...task.predecessors.filter((pred) => pred.task !== gone0.id), ...bridged];
+          reconnected++;
+        }
+      }
       const removed = d.tasks.splice(i, subtreeEnd(d.tasks, i) - i);
       const gone = new Set(removed.map((task) => task.id));
       for (const task of d.tasks) task.predecessors = task.predecessors.filter((pred) => !gone.has(pred.task));
-      return { op: 'delete', id: op.id, removed: removed.length };
+      return { op: 'delete', id: op.id, removed: removed.length, ...(reconnected && { reconnected }) };
+    }
+    case 'tighten': {
+      // Puts tasks on the first day their predecessors allow, closing the gap the placement left (a parent stands for its children).
+      allowKeys(op, ['op', 'ids']);
+      if (!Array.isArray(op.ids) || !op.ids.length || op.ids.length > 500) bad('ids', 'expect.ids');
+      const leaves = leafIndexes(d, op.ids);
+      let count = 0;
+      for (const i of dependencyOrder(d.tasks).filter((at) => leaves.has(at))) {
+        const task = d.tasks[i];
+        if (!task.predecessors.length) continue;
+        const plan = schedule(d, cal);
+        const first = Math.max(...task.predecessors.map((pred) => cal.add(plan.byId.get(pred.task).endDay, 1 + pred.lag)));
+        if (first < plan.rows[i].startDay) {
+          task.start = formatDate(first);
+          count++;
+        }
+      }
+      return { op: 'tighten', ids: op.ids, count };
     }
     case 'duplicate': {
       // Copies a task with everything under it, right after it. Dependencies among the copies point at the copies;
@@ -718,6 +742,7 @@ function runOp(d, op, ctx) {
 export function applyOps(doc, ops, ctx = {}) {
   if (!Array.isArray(ops) || ops.length === 0 || ops.length > 200) fail('invalid_input', 'err.opsCount');
   const d = structuredClone(doc);
+  const before = scheduleOrNull(doc);
   const results = ops.map((op, i) => {
     try {
       return runOp(d, op, ctx);
@@ -726,8 +751,49 @@ export function applyOps(doc, ops, ctx = {}) {
       throw error;
     }
   });
-  finalize(d);
-  return { doc: d, results };
+  // A leaf that becomes a parent loses its predecessors, and its dates come from its children.
+  const dropped = d.tasks.flatMap((task, i) => (isSummary(d.tasks, i) && task.predecessors.length ? [{ id: task.id, name: task.name, predecessors: task.predecessors.map((pred) => pred.task) }] : []));
+  const after = finalize(d);
+  return { doc: d, results, shifted: before ? shiftedTasks(before, after, d, ctx.includeNamed ? new Set() : namedLeaves(doc, d, ops)) : [], dropped };
+}
+
+/** The schedule of a document, or null when it cannot be computed (a damaged file). */
+function scheduleOrNull(doc) {
+  try {
+    return schedule(doc);
+  } catch {
+    return null;
+  }
+}
+
+/** Ids of the tasks the operations name (and the leaves under them), in either document: the tasks the user is editing, as against the ones that moved with them. */
+function namedLeaves(before, after, ops) {
+  const named = new Set();
+  for (const op of ops) {
+    for (const id of [op?.id, ...(Array.isArray(op?.ids) ? op.ids : [])]) {
+      if (typeof id !== 'string') continue;
+      for (const doc of [before, after]) {
+        const i = doc.tasks.findIndex((task) => task.id === id);
+        if (i >= 0) for (let j = i, end = subtreeEnd(doc.tasks, i); j < end; j++) named.add(doc.tasks[j].id);
+      }
+    }
+  }
+  return named;
+}
+
+/**
+ * The leaf tasks that start on another day after the operations than before them, other than the ones the operations
+ * name: what moved because of a dependency. `days` is in working days (positive = later).
+ */
+function shiftedTasks(before, after, doc, named) {
+  const cal = makeCalendar(doc.project);
+  const out = [];
+  for (const row of after.rows) {
+    const old = before.byId.get(row.id);
+    if (row.summary || !old || old.summary || named.has(row.id) || old.startDay === row.startDay) continue;
+    out.push({ id: row.id, name: doc.tasks[row.index].name, days: cal.diff(old.startDay, row.startDay) });
+  }
+  return out;
 }
 
 // ---- Output --------------------------------------------------------------------------------------------------
@@ -763,6 +829,7 @@ export function describe(doc, { includeVersions = false } = {}) {
       predecessors: task.predecessors,
       note: task.note,
       collapsed: task.collapsed,
+      ...(task.due && { due: task.due, ...(rows[i].endDay > parseDate(task.due) && { lateDays: rows[i].endDay - parseDate(task.due) }) }),
     })),
   };
   if (includeVersions) out.versions = doc.versions.map((version) => ({ id: version.id, name: version.name, createdAt: version.createdAt, taskCount: version.tasks.length }));

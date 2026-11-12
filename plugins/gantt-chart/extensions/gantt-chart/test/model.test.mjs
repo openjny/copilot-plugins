@@ -62,10 +62,10 @@ test('lag moves the successor by working days', () => {
   assert.equal(describe(doc).tasks.find((task) => task.id === 'd').start, '2026-11-24');
 });
 
-test('setting the start of a dependent task changes the lag instead', () => {
+test('placing a dependent task later is kept as its start and leaves the lag alone', () => {
   const doc = ops(sample(), [{ op: 'update', id: 'd', start: '2026-11-24' }]);
   const task = doc.tasks.find((item) => item.id === 'd');
-  assert.deepEqual(task.predecessors, [{ task: 'c', lag: 2 }]);
+  assert.deepEqual(task.predecessors, [{ task: 'c', lag: 0 }]);
   assert.equal(task.start, '2026-11-24');
 });
 
@@ -73,9 +73,9 @@ test('a start before the predecessors end becomes the first day they allow', () 
   const doc = ops(sample(), [{ op: 'update', id: 'd', predecessors: [{ task: 'c', lag: 2 }] }]);
   const run = applyOps(doc, [{ op: 'update', id: 'd', start: '2026-11-19' }], { now: NOW });
   const task = run.doc.tasks.find((item) => item.id === 'd');
-  assert.equal(task.start, '2026-11-20');
-  assert.deepEqual(task.predecessors, [{ task: 'c', lag: 0 }]);
-  assert.deepEqual(run.results[0].adjusted, { start: '2026-11-20' });
+  assert.equal(task.start, '2026-11-24');
+  assert.deepEqual(task.predecessors, [{ task: 'c', lag: 2 }]);
+  assert.deepEqual(run.results[0].adjusted, { start: '2026-11-24' });
 });
 
 test('a start the predecessors allow is kept and not reported as adjusted', () => {
@@ -84,12 +84,90 @@ test('a start the predecessors allow is kept and not reported as adjusted', () =
   assert.equal(run.results[0].adjusted, undefined);
 });
 
-test('moving a dependent task earlier only lowers the lag of the predecessor that decides the start', () => {
+test('moving a dependent task earlier stops at the gap its lags ask for', () => {
   const doc = ops(sample(), [{ op: 'update', id: 'd', predecessors: [{ task: 'c', lag: 3 }, { task: 'b' }] }]);
-  const moved = ops(doc, [{ op: 'update', id: 'd', start: '2026-11-23' }]);
-  const task = moved.tasks.find((item) => item.id === 'd');
-  assert.deepEqual(task.predecessors, [{ task: 'c', lag: 1 }, { task: 'b', lag: 0 }]);
-  assert.equal(task.start, '2026-11-23');
+  const run = applyOps(doc, [{ op: 'update', id: 'd', start: '2026-11-23' }], { now: NOW });
+  const task = run.doc.tasks.find((item) => item.id === 'd');
+  assert.equal(task.start, '2026-11-25');
+  assert.deepEqual(task.predecessors, [{ task: 'c', lag: 3 }, { task: 'b', lag: 0 }]);
+  assert.deepEqual(run.results[0].adjusted, { start: '2026-11-25' });
+});
+
+test('predecessors only push: shortening one does not pull what follows it earlier', () => {
+  const doc = ops(sample(), [{ op: 'update', id: 'b', duration: 1 }]);
+  const by = Object.fromEntries(doc.tasks.map((task) => [task.id, task.start]));
+  assert.deepEqual([by.c, by.d], ['2026-11-18', '2026-11-20']);
+  const longer = applyOps(sample(), [{ op: 'update', id: 'b', duration: 4 }], { now: NOW });
+  assert.deepEqual(longer.doc.tasks.filter((task) => task.id === 'c' || task.id === 'd').map((task) => task.start), ['2026-11-20', '2026-11-24']);
+  assert.deepEqual(longer.shifted, [{ id: 'c', name: '基本設計', days: 2 }, { id: 'd', name: '設計レビュー', days: 2 }]);
+});
+
+test('connecting to a task that starts later changes nothing, and to one that starts earlier pushes it', () => {
+  const later = applyOps(sample(), [{ op: 'update', id: 'e', predecessors: [{ task: 'b' }] }], { now: NOW });
+  assert.equal(later.doc.tasks.find((task) => task.id === 'e').start, '2026-11-25');
+  assert.deepEqual(later.shifted, []);
+  const earlier = applyOps(sample(), [{ op: 'update', id: 'b', predecessors: [{ task: 'e' }] }], { now: NOW });
+  const by = Object.fromEntries(earlier.doc.tasks.map((task) => [task.id, task.start]));
+  assert.deepEqual([by.b, by.c, by.d], ['2026-11-30', '2026-12-02', '2026-12-04']);
+  assert.deepEqual(earlier.shifted.map((item) => item.id), ['c', 'd']);
+});
+
+test('removing a link, or a task, never moves anything', () => {
+  const doc = ops(sample(), [{ op: 'update', id: 'd', start: '2026-11-24' }]);
+  for (const edit of [{ op: 'update', id: 'd', predecessors: [] }, { op: 'delete', id: 'c' }, { op: 'delete', id: 'b' }]) {
+    const run = applyOps(doc, [edit], { now: NOW });
+    assert.equal(run.doc.tasks.find((task) => task.id === 'd').start, '2026-11-24');
+    assert.deepEqual(run.shifted, []);
+  }
+});
+
+test('a new task with predecessors and no start is placed right after them', () => {
+  const run = applyOps(sample(), [{ op: 'add', id: 'f', name: 'F', predecessors: [{ task: 'e', lag: 1 }] }, { op: 'add', id: 'g', name: 'G', start: '2026-12-21', predecessors: [{ task: 'e' }] }], { now: NOW });
+  const by = Object.fromEntries(run.doc.tasks.map((task) => [task.id, task.start]));
+  assert.equal(by.f, '2026-12-01');
+  assert.equal(by.g, '2026-12-21');
+});
+
+test('tighten puts tasks on the first day their predecessors allow, one after the other', () => {
+  const doc = ops(sample(), [{ op: 'update', id: 'c', start: '2026-11-23' }, { op: 'update', id: 'd', start: '2026-11-30' }]);
+  const run = applyOps(doc, [{ op: 'tighten', ids: ['a'] }], { now: NOW });
+  const by = Object.fromEntries(run.doc.tasks.map((task) => [task.id, task.start]));
+  assert.deepEqual([by.c, by.d], ['2026-11-18', '2026-11-20']);
+  assert.equal(run.results[0].count, 2);
+  assert.equal(applyOps(sample(), [{ op: 'tighten', ids: ['a'] }], { now: NOW }).results[0].count, 0);
+  assert.throws(() => ops(sample(), [{ op: 'tighten', ids: [] }]), (error) => error.code === 'invalid_input');
+});
+
+test('deleting with reconnect hands the deleted task\'s predecessors to what waited for it', () => {
+  const run = applyOps(sample(), [{ op: 'delete', id: 'c', reconnect: true }], { now: NOW });
+  const d = run.doc.tasks.find((task) => task.id === 'd');
+  assert.deepEqual(d.predecessors, [{ task: 'b', lag: 2 }]);
+  assert.equal(d.start, '2026-11-20');
+  assert.equal(run.results[0].reconnected, 1);
+  const plain = applyOps(sample(), [{ op: 'delete', id: 'c' }], { now: NOW });
+  assert.deepEqual(plain.doc.tasks.find((task) => task.id === 'd').predecessors, []);
+  assert.throws(() => ops(sample(), [{ op: 'delete', id: 'a', reconnect: true }]), (error) => error.code === 'invalid_input');
+});
+
+test('a leaf that becomes a parent loses its predecessors, and the operation says so', () => {
+  const doc = ops(sample(), [{ op: 'update', id: 'e', predecessors: [{ task: 'd' }] }, { op: 'add', id: 'x', name: 'X', after: 'e' }]);
+  const run = applyOps(doc, [{ op: 'indent', id: 'x' }], { now: NOW });
+  assert.deepEqual(run.dropped, [{ id: 'e', name: '実装', predecessors: ['d'] }]);
+  assert.deepEqual(run.doc.tasks.find((task) => task.id === 'e').predecessors, []);
+  assert.deepEqual(applyOps(doc, [{ op: 'update', id: 'x', name: 'Y' }], { now: NOW }).dropped, []);
+});
+
+test('a due date is optional, round-trips, and shows when the task ends after it', () => {
+  const doc = ops(sample(), [{ op: 'update', id: 'e', due: '2026-11-26' }, { op: 'update', id: 'a', due: '2026-11-20' }]);
+  const view = describe(doc);
+  const by = Object.fromEntries(view.tasks.map((task) => [task.id, task]));
+  assert.deepEqual([by.e.due, by.e.lateDays], ['2026-11-26', 1]);
+  assert.deepEqual([by.a.due, by.a.lateDays], ['2026-11-20', undefined]);
+  assert.equal(by.b.due, undefined);
+  const again = readDoc(JSON.parse(serializeDoc(doc)));
+  assert.deepEqual([again.tasks.find((task) => task.id === 'e').due, again.tasks.find((task) => task.id === 'a').due], ['2026-11-26', '2026-11-20']);
+  assert.equal(ops(doc, [{ op: 'update', id: 'e', due: null }]).tasks.find((task) => task.id === 'e').due, null);
+  assert.throws(() => ops(sample(), [{ op: 'update', id: 'e', due: '2026-02-30' }]), (error) => error.code === 'invalid_input');
 });
 
 test('a negative lag is rejected when editing and when reading a file', () => {
@@ -121,18 +199,23 @@ test('slide is cut down to what the predecessors allow', () => {
   const doc = ops(sample(), [{ op: 'update', id: 'd', predecessors: [{ task: 'c', lag: 2 }] }]);
   const run = applyOps(doc, [{ op: 'slide', ids: ['d'], days: -5 }], { now: NOW });
   const task = run.doc.tasks.find((item) => item.id === 'd');
-  assert.equal(task.start, '2026-11-20');
-  assert.deepEqual(task.predecessors, [{ task: 'c', lag: 0 }]);
-  assert.deepEqual(run.results[0].adjusted, { days: -2 });
-  assert.equal(maxSlideEarlier(doc, ['d']), 2);
+  assert.equal(task.start, '2026-11-24');
+  assert.deepEqual(task.predecessors, [{ task: 'c', lag: 2 }]);
+  assert.deepEqual(run.results[0].adjusted, { days: 0 });
+  assert.equal(maxSlideEarlier(doc, ['d']), 0);
+  assert.equal(maxSlideEarlier(ops(doc, [{ op: 'update', id: 'd', start: '2026-12-01' }]), ['d']), 5);
 });
 
-test('sliding a dependent task later raises its lag and carries what follows it', () => {
+test('sliding a dependent task later keeps its lag and pushes what follows it only when it would overlap', () => {
   const run = applyOps(sample(), [{ op: 'slide', ids: ['c'], days: 3 }], { now: NOW });
   const by = Object.fromEntries(run.doc.tasks.map((task) => [task.id, task]));
-  assert.deepEqual(by.c.predecessors, [{ task: 'b', lag: 3 }]);
+  assert.deepEqual(by.c.predecessors, [{ task: 'b', lag: 0 }]);
   assert.deepEqual([by.c.start, by.d.start], ['2026-11-23', '2026-11-25']);
   assert.equal(run.results[0].adjusted, undefined);
+  assert.deepEqual(run.shifted, [{ id: 'd', name: '設計レビュー', days: 3 }]);
+  const slack = applyOps(ops(sample(), [{ op: 'update', id: 'd', start: '2026-11-30' }]), [{ op: 'slide', ids: ['c'], days: 3 }], { now: NOW });
+  assert.equal(slack.doc.tasks.find((task) => task.id === 'd').start, '2026-11-30');
+  assert.deepEqual(slack.shifted, []);
 });
 
 test('slide rejects unknown tasks and bad days', () => {

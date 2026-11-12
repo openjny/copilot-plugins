@@ -1,5 +1,5 @@
 import { LOCALES, getLocale, resolveLocale, setLocale, t } from '/i18n.mjs';
-import { FIRST_DAY, PALETTE, formatDate, formatDuration, isSummary, makeCalendar, maxSlideEarlier, mondayOnOrBefore, parseDate, parseDuration, schedule, subtreeEnd, todayDay, ymd } from '/model.mjs';
+import { FIRST_DAY, PALETTE, applyOps, formatDate, formatDuration, isSummary, makeCalendar, maxSlideEarlier, mondayOnOrBefore, parseDate, parseDuration, schedule, subtreeEnd, todayDay, ymd } from '/model.mjs';
 
 // Row height and pixels per day change with Ctrl+scroll, so they are variables; the ROW_STD / PPD values are the
 // "standard" scale that the day / week / month buttons reset to.
@@ -33,6 +33,7 @@ const ICONS = {
   up: 'M12 19V5M6 11l6-6 6 6',
   down: 'M12 5v14M6 13l6 6 6-6',
   sidebar: 'M4 5h16v14H4zM9 5v14',
+  tighten: 'M20 12H10M14 8l-4 4 4 4M4 5v14',
   text: 'M4 7V4h16v3M9 20h6M12 4v16',
   sliders: 'M4 6h10M18 6h2M16 4v4M4 12h2M10 12h10M8 10v4M4 18h9M17 18h3M15 16v4',
   history: 'M4 12a8 8 0 1 0 3-6.2M4 4v4h4M12 8v4l3 2',
@@ -183,11 +184,12 @@ function svgEl(tag, attrs = {}) {
 }
 
 let toastTimer;
-function toast(message, kind = 'info') {
-  ui.toast.textContent = message;
-  ui.toast.className = `toast show ${kind}`;
+/** Shows a message for a few seconds; `action` ({ label, run }) adds a button, and the message then stays a little longer. */
+function toast(message, kind = 'info', action = null) {
+  ui.toast.replaceChildren(message, action ? h('button', { class: 'toast-act', type: 'button', onclick: () => { ui.toast.classList.remove('show'); action.run(); } }, action.label) : null);
+  ui.toast.className = `toast show ${kind}${action ? ' act' : ''}`;
   clearTimeout(toastTimer);
-  toastTimer = setTimeout(() => ui.toast.classList.remove('show'), 5000);
+  toastTimer = setTimeout(() => ui.toast.classList.remove('show'), action ? 9000 : 5000);
 }
 
 function confirmDialog(message, okLabel) {
@@ -200,7 +202,7 @@ function confirmDialog(message, okLabel) {
       resolve(value);
     };
     dialog.replaceChildren(
-      h('div', { class: 'db' }, h('p', { id: 'confirm-text', style: { margin: '0' } }, message)),
+      h('div', { class: 'db' }, h('p', { id: 'confirm-text', style: { margin: '0', whiteSpace: 'pre-line' } }, message)),
       h('div', { class: 'df' }, h('button', { class: 'btn', type: 'button', onclick: () => done(false) }, t('dlg.cancel')), h('button', { class: 'btn primary', type: 'button', onclick: () => done(true) }, okLabel)),
     );
     dialog.addEventListener('cancel', onCancel, { once: true });
@@ -269,18 +271,47 @@ async function post(path, body) {
 /**
  * Sends edit operations; the server saves them and answers with the new state.
  * An error goes to onError when given (a modal dialog covers the toast), otherwise to the toast.
+ * When the edit pushed other tasks later (through their dependencies) or moved the start that was asked for, the toast
+ * says so, and offers to undo it.
  */
 async function send(ops, onError) {
+  // Connecting (or changing a lag) can push the very task that is edited, which the server does not count as "other".
+  const own = ops.length === 1 && isLinkEdit(ops[0]) ? previewOps(ops, { own: true })?.shifted : null;
   return request('/api/ops', { ops }, (data) => {
     const moved = data.results.find((result) => result.adjusted?.start);
+    const pushed = own ?? data.shifted ?? [];
+    const parts = [];
+    if (moved) parts.push(t('toast.adjustedStart', { date: moved.adjusted.start }));
+    if (pushed.length) parts.push(shiftText('toast.shifted', pushed));
+    if (parts.length) toast(parts.join(' '), 'info', pushed.length ? { label: t('toast.undo'), run: () => stepHistory('undo') } : null);
     if (moved) {
-      toast(t('toast.adjustedStart', { date: moved.adjusted.start }), 'info');
       app.panelKey = '';
       renderPanel();
     }
     return data.results;
   }, onError);
 }
+
+/** An update that only touches the predecessors (adding one, a lag, removing one). */
+const isLinkEdit = (op) => op.op === 'update' && op.predecessors !== undefined && op.start === undefined && op.end === undefined && op.duration === undefined;
+
+/**
+ * What the operations would do, without saving them: the model's own answer (applyOps), or null when they would fail.
+ * `own` also counts the edited task itself among the tasks that moved.
+ */
+function previewOps(ops, { own = false } = {}) {
+  try {
+    return applyOps(app.state.doc, ops, { includeNamed: own });
+  } catch {
+    return null;
+  }
+}
+
+/** "'X' was pushed 3d later" / "4 tasks were pushed later (by up to 2w)": `key` names the message for one task, `${key}Many` the one for several. */
+const shiftText = (key, shifted) => {
+  const days = formatDuration(Math.max(...shifted.map((item) => item.days)));
+  return shifted.length === 1 ? t(key, { name: shifted[0].name, days }) : t(`${key}Many`, { count: shifted.length, days });
+};
 
 /** Posts to an API route that changes the chart, shows the state it answers with, and reports a failure. */
 async function request(path, body, done, onError) {
@@ -670,7 +701,7 @@ function buildToolbar() {
     button('tb-add', 'plus', t('tb.add'), onAdd),
     button('tb-del', 'trash', t('tb.delete'), onDelete),
     h('span', { class: 'sep' }),
-    button('tb-indent', 'indent', t('tb.indent'), () => operate('indent')),
+    button('tb-indent', 'indent', t('tb.indent'), () => app.selected && indentTask(app.selected)),
     button('tb-outdent', 'outdent', t('tb.outdent'), () => operate('outdent')),
     button('tb-up', 'up', t('tb.up'), () => operate('shift', { direction: 'up' })),
     button('tb-down', 'down', t('tb.down'), () => operate('shift', { direction: 'down' })),
@@ -965,8 +996,31 @@ async function duplicateTasks(ids) {
   if (results) pick(results.map((result) => result.copy), results[0].copy);
 }
 
+/**
+ * Asks before a task that has predecessors (or is a milestone) becomes a parent: a parent takes its dates from its
+ * children, so it loses both. Resolves to whether to go on.
+ */
+async function confirmParent(id) {
+  const task = taskById(id);
+  if (!task || rowById(id)?.summary) return true;
+  const losses = [];
+  if (task.predecessors.length) losses.push(t('parent.losesPreds', { count: task.predecessors.length }));
+  if (task.milestone) losses.push(t('parent.losesMilestone'));
+  if (!losses.length) return true;
+  return confirmDialog([t('parent.lead', { name: task.name }), ...losses, t('parent.follows'), t('parent.ask')].join('\n'), t('parent.ok'));
+}
+
+/** Indents a task. When the task above it is at the same level, that one becomes its parent. */
+async function indentTask(id) {
+  const list = tasks();
+  const i = list.findIndex((task) => task.id === id);
+  if (i > 0 && list[i - 1].level === list[i].level && !(await confirmParent(list[i - 1].id))) return;
+  await send([{ op: 'indent', id }]);
+}
+
 /** Adds a task as the last child of a task (opening it when it is folded). */
 async function addChild(id) {
+  if (!(await confirmParent(id))) return;
   const ops = [];
   if (taskById(id)?.collapsed) ops.push({ op: 'update', id, collapsed: false });
   ops.push({ op: 'add', parent: id });
@@ -1021,6 +1075,30 @@ function showMenu(at, items) {
   ui.ctx.querySelector('button:not(:disabled)')?.focus();
 }
 
+/** Ids of the tasks that wait for these tasks, directly or through others: what moves along when they are pushed later. */
+function followersOf(ids) {
+  const list = tasks();
+  const found = new Set();
+  const stack = [...ids];
+  while (stack.length) {
+    const current = stack.pop();
+    for (const task of list) {
+      if (found.has(task.id) || ids.includes(task.id) || !task.predecessors.some((pred) => pred.task === current)) continue;
+      found.add(task.id);
+      stack.push(task.id);
+    }
+  }
+  return [...found];
+}
+
+/** Puts the tasks on the first day their predecessors allow, and says how many moved. */
+async function tightenTasks(ids) {
+  const results = await send([{ op: 'tighten', ids }]);
+  const count = results?.[0]?.count;
+  if (count === undefined) return;
+  toast(count ? t('toast.tightened', { count }) : t('toast.tightenedNone'), 'info', count ? { label: t('toast.undo'), run: () => stepHistory('undo') } : null);
+}
+
 /** Folds a parent task (hides its children) or unfolds it. */
 const toggleFold = (id) => send([{ op: 'update', id, collapsed: !taskById(id).collapsed }]);
 
@@ -1046,7 +1124,7 @@ function taskMenu(event, id) {
   if (!several) {
     items.push(
       { separator: true },
-      { label: t('tb.indentShort'), icon: 'indent', disabled: !can.indent, run: () => send([{ op: 'indent', id }]) },
+      { label: t('tb.indentShort'), icon: 'indent', disabled: !can.indent, run: () => indentTask(id) },
       { label: t('tb.outdent'), icon: 'outdent', disabled: !can.outdent, run: () => send([{ op: 'outdent', id }]) },
       { label: t('tb.up'), icon: 'up', hint: 'Alt+↑', disabled: !can.up, run: () => send([{ op: 'shift', id, direction: 'up' }]) },
       { label: t('tb.down'), icon: 'down', hint: 'Alt+↓', disabled: !can.down, run: () => send([{ op: 'shift', id, direction: 'down' }]) },
@@ -1054,14 +1132,25 @@ function taskMenu(event, id) {
       { label: row.milestone ? t('ctx.makeTask') : t('ctx.makeMilestone'), icon: 'milestone', disabled: row.summary, run: () => send([{ op: 'update', id, milestone: !row.milestone }]) },
     );
   }
+  const following = several ? [] : followersOf([id, ...leavesOf([id])]);
+  const dependency = [];
+  if (following.length) dependency.push({ label: t('ctx.selectFollowing'), icon: 'down', run: () => pick([id, ...following], id) });
+  if (leavesOf(ids).some((leaf) => taskById(leaf).predecessors.length)) {
+    const slack = previewOps([{ op: 'tighten', ids }])?.results[0].count ?? 0;
+    dependency.push({ label: several ? t('ctx.tightenMany', { count: ids.length }) : t('ctx.tighten'), icon: 'tighten', disabled: !slack, run: () => tightenTasks(ids) });
+  }
+  if (dependency.length) items.push({ separator: true }, ...dependency);
   const chosen = chosenColor(row);
   const inherit = inheritItem(ids, chosen);
+  // A task with something before it and something after it can be deleted without cutting the chain.
+  const bridges = !several && !row.summary && list[i].predecessors.length > 0 && list.some((task) => task.predecessors.some((pred) => pred.task === id));
   items.push(
     { separator: true },
     { heading: t('tb.color') },
     { swatches: PALETTE, current: chosen, run: (color) => setColor(ids, color) },
     ...(inherit ? [inherit] : []),
     { separator: true },
+    ...(bridges ? [{ label: t('ctx.deleteReconnect'), icon: 'trash', run: () => send([{ op: 'delete', id, reconnect: true }]) }] : []),
     { label: several ? t('ctx.deleteMany', { count: ids.length }) : t('ctx.deleteOne'), icon: 'trash', hint: 'Del', danger: true, run: () => deleteTasks(ids) },
   );
   showMenu(event, items);
@@ -1453,42 +1542,49 @@ function renderBody() {
     const percent = Math.round(row.progress);
     const label = t('bar.label', { name: task.name, start: formatDate(row.startDay), end: formatDate(row.endDay), duration: formatDuration(row.duration), progress: percent });
     const selected = app.picked.has(row.id);
+    // A deadline shows as a flag at the end of its day; a task that ends after it is late.
+    const dueDay = task.due ? parseDate(task.due) : null;
+    const lateDays = dueDay !== null && row.endDay > dueDay ? row.endDay - dueDay : 0;
+    const late = lateDays ? ' late' : '';
+    const lateTag = () => (lateDays ? h('span', { class: 'late-tag' }, t('due.tag', { count: lateDays })) : null);
+    if (dueDay !== null) parts.push(h('div', { class: `due${late}`, 'data-due': row.id, title: t('due.marker', { date: task.due }), style: { left: `${(dueDay - start + 1) * ppd - 1}px`, top: `${top + 2}px`, height: `${ROW_H - 4}px` } }));
     if (row.summary) {
       // A parent is a bar with a notch at each end and, when the names are shown, its name on top.
       // Everything grows with the row height, and the block is centered in the row.
       const { bar: sb, notch, label: lh } = summarySize();
       const block = (named ? lh : 0) + sb + notch;
       const y = top + Math.max(0, Math.round((ROW_H - block) / 2));
-      const sbar = h('div', { class: `sbar c-${colorOf(row)}${selected ? ' sel' : ''}`, 'data-id': row.id, role: 'img', 'aria-label': label, title: label, style: { left: `${left}px`, width: `${width}px`, top: `${y + (named ? lh : 0)}px` } });
+      const sbar = h('div', { class: `sbar c-${colorOf(row)}${selected ? ' sel' : ''}${late}`, 'data-id': row.id, role: 'img', 'aria-label': label, title: label, style: { left: `${left}px`, width: `${width}px`, top: `${y + (named ? lh : 0)}px` } });
       wireBar(sbar, row);
       parts.push(sbar);
       // A folded parent shows ▸ before its name: with the list hidden this is the only sign that tasks are tucked away under it.
-      if (named) parts.push(h('div', { class: 'sum-label', style: { left: `${left}px`, top: `${y}px` } }, `${task.collapsed ? '▸ ' : ''}${task.name}  ${percent}%`));
-      else parts.push(h('div', { class: 'after-label', style: { left: `${left + width}px`, top: `${top + 5}px` } }, `${percent}%`));
+      if (named) parts.push(h('div', { class: 'sum-label', style: { left: `${left}px`, top: `${y}px` } }, `${task.collapsed ? '▸ ' : ''}${task.name}  ${percent}%`, lateTag()));
+      else parts.push(h('div', { class: 'after-label', style: { left: `${left + width}px`, top: `${top + 5}px` } }, `${percent}%`, lateTag()));
       continue;
     }
     if (row.milestone) {
       // A milestone is a diamond centered on its day, with its name after it.
       const size = BAR_H;
       const cx = left + ppd / 2;
-      const diamond = h('div', { class: `bar ms c-${colorOf(row)}${selected ? ' sel' : ''}`, 'data-id': row.id, role: 'img', 'aria-label': label, title: label, style: { left: `${cx - size / 2}px`, width: `${size}px`, top: `${top + 5}px` } });
+      const diamond = h('div', { class: `bar ms c-${colorOf(row)}${selected ? ' sel' : ''}${late}`, 'data-id': row.id, role: 'img', 'aria-label': label, title: label, style: { left: `${cx - size / 2}px`, width: `${size}px`, top: `${top + 5}px` } });
       wireBar(diamond, row);
       parts.push(diamond);
-      if (named) parts.push(h('div', { class: 'after-label', style: { left: `${cx + size / 2}px`, top: `${top + 5}px` } }, task.name));
+      if (named || lateDays) parts.push(h('div', { class: 'after-label', style: { left: `${cx + size / 2}px`, top: `${top + 5}px` } }, named ? task.name : null, lateTag()));
       continue;
     }
     // The name goes inside the bar when it fits, otherwise after it; without names only the progress is shown.
     const inside = named ? width >= 80 : width >= 40 && app.zoom === 'day';
     const bar = h(
       'div',
-      { class: `bar c-${colorOf(row)}${selected ? ' sel' : ''}`, 'data-id': row.id, role: 'img', 'aria-label': label, title: label, style: { left: `${left}px`, width: `${width}px`, top: `${top + 5}px` } },
+      { class: `bar c-${colorOf(row)}${selected ? ' sel' : ''}${late}`, 'data-id': row.id, role: 'img', 'aria-label': label, title: label, style: { left: `${left}px`, width: `${width}px`, top: `${top + 5}px` } },
       h('div', { class: 'fill', style: { width: `${percent}%` } }),
       inside ? h('span', { class: `pct${named ? ' named' : ''}` }, named ? `${task.name}  ${percent}%` : `${percent}%`) : null,
       h('div', { class: 'grip' }),
     );
     wireBar(bar, row);
     parts.push(bar);
-    if (named ? !inside : !inside || app.zoom !== 'day') parts.push(h('div', { class: 'after-label', style: { left: `${left + width}px`, top: `${top + 5}px` } }, named ? `${task.name}  ${percent}%` : `${percent}%`));
+    const after = named ? !inside : !inside || app.zoom !== 'day';
+    if (after || lateDays) parts.push(h('div', { class: 'after-label', style: { left: `${left + width}px`, top: `${top + 5}px` } }, after ? (named ? `${task.name}  ${percent}%` : `${percent}%`) : null, lateTag()));
   }
 
   parts.push(linksLayer(rowTop));
@@ -1774,10 +1870,17 @@ function renderStatus() {
     t('status.progress', { value: project.count ? `${project.progress.toFixed(2)}%` : '-' }),
   ];
   const row = selectedRow();
+  const late = app.sched.rows.filter((item) => {
+    const due = taskById(item.id)?.due;
+    return due && item.endDay > parseDate(due);
+  }).length;
   if (app.selLink) parts.push(t('status.linkSelected'));
   else if (app.picked.size > 1) parts.push(t('status.selectedMany', { count: app.picked.size }));
   else if (row) parts.push(`${taskById(row.id).name}  ${slash(row.startDay)} – ${slash(row.endDay)} (${formatDuration(row.duration)})`);
-  ui.status.replaceChildren(...parts.map((text) => h('span', {}, text)));
+  const spans = parts.map((text) => h('span', {}, text));
+  // The count of late tasks sits right after the project figures, in red.
+  if (late) spans.splice(4, 0, h('span', { class: 'late' }, t('status.late', { value: late })));
+  ui.status.replaceChildren(...spans);
 }
 
 // ---- Dragging bars --------------------------------------------------------------------------------------------
@@ -1831,6 +1934,9 @@ function beginDrag(event, row, bar) {
     els,
     maxLeft: resize ? 0 : maxSlideEarlier(app.state.doc, group),
     days: 0,
+    // The tasks the dependencies would push if the drag ended now, by id (see previewPush).
+    pushed: new Map(),
+    pushKey: null,
     collapse,
     modifier,
     moved: false,
@@ -1847,6 +1953,33 @@ function beginDrag(event, row, bar) {
 function slideDays(drag) {
   const wanted = app.cal.diff(drag.row.startDay, app.cal.next(drag.row.startDay + drag.delta));
   return { days: Math.max(wanted, -drag.maxLeft), limited: wanted < -drag.maxLeft };
+}
+
+/** Shows what the drag would push: the tasks that wait for the dragged ones move ahead, marked, as they would when it ends. */
+function previewPush(drag, key, ops) {
+  if (drag.pushKey !== key) {
+    drag.pushKey = key;
+    const next = new Map((previewOps(ops)?.shifted ?? []).map((item) => [item.id, item]));
+    const bar = (id) => ui.bt.querySelector(`[data-id="${id}"].bar, [data-id="${id}"].sbar`);
+    for (const id of drag.pushed.keys()) {
+      if (next.has(id)) continue;
+      const el = bar(id);
+      if (el) {
+        el.style.transform = '';
+        el.classList.remove('pushed');
+      }
+    }
+    for (const [id, item] of next) {
+      const el = bar(id);
+      const from = rowById(id)?.startDay;
+      if (!el || from === undefined) continue;
+      el.style.transform = `translateX(${(app.cal.add(from, item.days) - from) * app.range.ppd}px)`;
+      el.classList.add('pushed');
+    }
+    drag.pushed = next;
+  }
+  const pushed = [...drag.pushed.values()];
+  return pushed.length ? ` → ${shiftText('drag.pushes', pushed)}` : '';
 }
 
 function resizeTarget(drag) {
@@ -1881,9 +2014,11 @@ function updateDrag(drag) {
     end = app.cal.add(drag.row.endDay, days);
     if (drag.leaves.length > 1) note += ` ${t('drag.moveTogether', { count: drag.leaves.length })}`;
     if (limited) note += ` ${t('drag.limited')}`;
+    if (days) note += previewPush(drag, days, [{ op: 'slide', ids: drag.group, days }]);
   } else {
     drag.bar.style.width = `${Math.max(ppd, drag.width + drag.delta * ppd)}px`;
     ({ start, end } = resizeTarget(drag));
+    if (end !== drag.row.endDay) note += previewPush(drag, end, [{ op: 'update', id: drag.row.id, end: formatDate(end) }]);
   }
   ui.tip.hidden = false;
   ui.tip.textContent = `${formatDate(start)} – ${formatDate(end)}（${formatDuration(app.cal.count(start, end))}）${note}`;
@@ -2113,6 +2248,17 @@ function dependsOn(id, wanted) {
   return false;
 }
 
+/** The tasks that would be pushed later if the arrow being dragged were connected to `targetId` (remembered while the pointer stays on it). */
+function linkPushes(targetId) {
+  const link = app.link;
+  if (link.probeId !== targetId) {
+    const [pred, succ] = link.dir === 'out' ? [link.id, targetId] : [targetId, link.id];
+    link.probeId = targetId;
+    link.probe = previewOps([{ op: 'update', id: succ, predecessors: [...taskById(succ).predecessors, { task: pred, lag: 0 }] }], { own: true })?.shifted ?? [];
+  }
+  return link.probe;
+}
+
 function updateLink(event) {
   const link = app.link;
   if (!link) return;
@@ -2123,12 +2269,22 @@ function updateLink(event) {
   link.dot.setAttribute('cy', event.clientY - box.top);
   if (Math.hypot(event.clientX - link.x0, event.clientY - link.y0) > 4) link.moved = true;
   const over = document.elementsFromPoint(event.clientX, event.clientY).find((el) => el.matches?.('.bar, .sbar'));
-  for (const el of ui.bt.querySelectorAll('.link-ok, .link-bad')) el.classList.remove('link-ok', 'link-bad');
+  for (const el of ui.bt.querySelectorAll('.link-ok, .link-bad, .link-push')) el.classList.remove('link-ok', 'link-bad', 'link-push');
+  ui.tip.hidden = true;
   link.target = null;
   if (!over || over.dataset.id === link.id) return;
   const ok = !linkProblem(over.dataset.id);
   over.classList.add(ok ? 'link-ok' : 'link-bad');
-  if (ok) link.target = over.dataset.id;
+  if (!ok) return;
+  link.target = over.dataset.id;
+  // Say what connecting would do to the dates, before it is done.
+  const pushes = linkPushes(over.dataset.id);
+  if (!pushes.length) return;
+  over.classList.add('link-push');
+  ui.tip.hidden = false;
+  ui.tip.textContent = shiftText('link.pushes', pushes);
+  ui.tip.style.left = `${event.clientX + 14}px`;
+  ui.tip.style.top = `${event.clientY + 16}px`;
 }
 
 // Dragging an arrow onto a task connects them; clicking an arrow waits for the next click on a task.
@@ -2151,7 +2307,8 @@ function cancelLink() {
   if (!link) return;
   app.link = null;
   link.svg.remove();
-  for (const el of ui.bt.querySelectorAll('.link-ok, .link-bad')) el.classList.remove('link-ok', 'link-bad');
+  ui.tip.hidden = true;
+  for (const el of ui.bt.querySelectorAll('.link-ok, .link-bad, .link-push')) el.classList.remove('link-ok', 'link-bad', 'link-push');
   ui.bt.querySelector('.conn')?.classList.remove('show');
 }
 
@@ -2665,6 +2822,7 @@ function taskForm(row) {
       }),
     ),
     h('label', { class: 'check' }, h('input', { type: 'checkbox', checked: milestone, disabled: parent, 'data-field': 'milestone', onchange: (event) => commit({ milestone: event.target.checked }) }), t('panel.milestone')),
+    labeled(t('panel.due'), h('input', { type: 'date', value: task.due ?? '', 'data-field': 'due', onchange: (event) => commit({ due: event.target.value || null }) }), 'wide'),
     h('div', { class: 'lbl wide' }, t('panel.resources'), tagInput({ values: task.resources, ariaLabel: t('panel.resources'), placeholder: t('tags.placeholder'), onChange: (resources) => commit({ resources }) })),
     h(
       'div',

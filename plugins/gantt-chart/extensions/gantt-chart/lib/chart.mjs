@@ -181,12 +181,12 @@ export class Chart {
     return withFileLock(pathKey(this.file), async () => {
       await this.#syncFromDisk();
       if (this.error) fail('file_invalid', 'err.fileInvalidEdit', { message: this.error.message });
-      const { doc, results } = applyOps(this.doc, ops);
+      const { doc, results, shifted, dropped } = applyOps(this.doc, ops);
       const text = serializeDoc(doc);
       // An edit that changes nothing is not a step to undo.
       if (hashText(text) !== this.hash) this.#record(historyLabel(ops));
       await this.#adopt(doc, text);
-      return { results };
+      return { results, shifted, dropped };
     });
   }
 
