@@ -2,7 +2,7 @@
   "name": "openjny",
   "metadata": {
     "description": "Public GitHub Copilot plugins from openjny",
-    "version": "1.5.0"
+    "version": "1.5.1"
   },
   "owner": {
     "name": "openjny",
@@ -170,7 +170,7 @@
     },
     {
       "name": "gantt-chart",
-      "version": "1.0.0",
+      "version": "1.1.0",
       "description": "A canvas with an editable Gantt chart saved in a JSON file: parent tasks, draggable bars, dependencies, progress, color labels, resources and saved versions, edited by the user and by the agent.",
       "author": {
         "name": "openjny",

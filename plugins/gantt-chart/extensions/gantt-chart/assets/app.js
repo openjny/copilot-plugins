@@ -1,6 +1,7 @@
 import { COLORS, dayOfWeek, formatDate, formatDuration, makeCalendar, mondayOnOrBefore, parseDate, parseDuration, schedule, subtreeEnd, todayDay, ymd } from '/model.mjs';
 
 const ROW_H = 28;
+const LINK_LEG = 14;
 const HEAD_H = 56;
 const PPD = { day: 48, week: 18, month: 5 };
 const MIN_DAYS = { day: 35, week: 140, month: 365 };
@@ -23,6 +24,13 @@ const ICONS = {
   sun: 'M12 8a4 4 0 1 0 0 8 4 4 0 0 0 0-8zM12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4',
   moon: 'M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z',
   monitor: 'M3 5h18v11H3zM8 20h8M12 16v4',
+  columns: 'M4 5h16v14H4zM9 5v14M15 5v14',
+};
+// Columns of the task list besides the always visible name, in display order.
+const COLS = {
+  no: { label: '#', title: '番号', width: 36, align: 'right' },
+  dur: { label: '期間', title: '期間', width: 56, align: 'right' },
+  res: { label: '担当', title: '担当', width: 88 },
 };
 
 const app = {
@@ -43,6 +51,7 @@ const app = {
   leftW: Math.max(240, Math.min(360, Math.round(window.innerWidth * 0.4))),
   panelKey: '',
   startKey: null,
+  cols: { no: true, dur: true, res: true },
   theme: document.documentElement.dataset.theme in THEME_NAME ? document.documentElement.dataset.theme : 'auto',
 };
 
@@ -357,7 +366,39 @@ function buildToolbar() {
     button('tb-down', 'down', '下へ移動', () => operate('shift', { direction: 'down' })),
     h('span', { class: 'sep' }),
     colorSelect,
+    h('span', { class: 'spacer' }),
+    h(
+      'button',
+      {
+        id: 'tb-cols-min',
+        class: 'btn square',
+        type: 'button',
+        title: '名前だけ表示（もう一度押すとすべて表示）',
+        'aria-label': '名前だけ表示',
+        onclick: () => setColumns(Object.fromEntries(Object.keys(COLS).map((key) => [key, shownCols().length === 0]))),
+      },
+      icon('columns'),
+    ),
+    h(
+      'div',
+      { class: 'seg', role: 'group', 'aria-label': '一覧に表示する列' },
+      ...Object.entries(COLS).map(([key, col]) => h('button', { id: `tb-col-${key}`, class: 'btn', type: 'button', title: `${col.title}の列を表示`, onclick: () => setColumns({ ...app.cols, [key]: !app.cols[key] }) }, col.label)),
+    ),
   );
+}
+
+const shownCols = () => Object.keys(COLS).filter((key) => app.cols[key]);
+const colsWidth = () => shownCols().reduce((sum, key) => sum + COLS[key].width, 0);
+const colsTemplate = () => [app.cols.no && `${COLS.no.width}px`, '1fr', app.cols.dur && `${COLS.dur.width}px`, app.cols.res && `${COLS.res.width}px`].filter(Boolean).join(' ');
+const clampLeftWidth = (width) => Math.max(Math.max(120, colsWidth() + 40), Math.min(width, 720, ui.scroller.clientWidth - 160));
+
+// Hiding a column narrows the list by that column's width (showing one widens it), so the name column keeps its width.
+function setColumns(cols) {
+  const before = colsWidth();
+  app.cols = cols;
+  app.leftW = clampLeftWidth(app.leftW + colsWidth() - before);
+  renderToolbar();
+  renderChart();
 }
 
 function siblingExists(list, i, direction) {
@@ -387,6 +428,8 @@ function renderToolbar() {
   const color = $('tb-color');
   color.disabled = !row;
   color.value = row ? list[i].color : 'none';
+  $('tb-cols-min').setAttribute('aria-pressed', String(shownCols().length === 0));
+  for (const key of Object.keys(COLS)) $(`tb-col-${key}`).setAttribute('aria-pressed', String(app.cols[key]));
 }
 
 async function onAdd() {
@@ -446,6 +489,7 @@ function renderChart() {
   app.range = computeRange(rows);
   const bodyMin = Math.max(app.visible.length * ROW_H, ui.scroller.clientHeight - HEAD_H);
   ui.grid.style.setProperty('--leftW', `${app.leftW}px`);
+  ui.grid.style.setProperty('--cols', colsTemplate());
   ui.grid.style.setProperty('--tlW', `${app.range.width}px`);
   ui.grid.style.setProperty('--body-min', `${bodyMin}px`);
   renderLeftHeader();
@@ -457,7 +501,7 @@ function renderChart() {
 function renderLeftHeader() {
   const splitter = h('div', { class: 'splitter', role: 'separator', 'aria-orientation': 'vertical', 'aria-label': '一覧の幅', tabindex: '0' });
   const resize = (width) => {
-    app.leftW = Math.max(220, Math.min(width, 720, ui.scroller.clientWidth - 160));
+    app.leftW = clampLeftWidth(width);
     ui.grid.style.setProperty('--leftW', `${app.leftW}px`);
   };
   splitter.addEventListener('pointerdown', (event) => {
@@ -481,7 +525,8 @@ function renderLeftHeader() {
     renderChart();
     ui.hl.querySelector('.splitter')?.focus();
   });
-  ui.hl.replaceChildren(h('div', { class: 'cols' }, h('div', { style: { textAlign: 'right' } }, '#'), h('div', {}, 'タスク名'), h('div', { style: { textAlign: 'right' } }, '期間'), h('div', {}, '担当')), splitter);
+  const head = (key) => (key === 'name' ? h('div', {}, 'タスク名') : app.cols[key] ? h('div', COLS[key].align ? { style: { textAlign: COLS[key].align } } : {}, COLS[key].label) : null);
+  ui.hl.replaceChildren(h('div', { class: 'cols' }, head('no'), head('name'), head('dur'), head('res')), splitter);
 }
 
 function renderTimelineHeader() {
@@ -556,11 +601,11 @@ function leftRow(row) {
   if (row.summary) attrs['aria-expanded'] = String(!task.collapsed);
   const el = h(
     'div',
-    { ...attrs, onclick: () => select(row.id), ondblclick: () => startEdit(row.id) },
-    h('div', { class: 'c-no', role: 'gridcell' }, String(row.row)),
+    { ...attrs, onclick: () => showDetail(row.id), ondblclick: () => startEdit(row.id) },
+    app.cols.no ? h('div', { class: 'c-no', role: 'gridcell' }, String(row.row)) : null,
     h('div', { class: 'c-name', role: 'gridcell', style: { paddingLeft: `${6 + row.level * 16}px` } }, caret, name),
-    h('div', { class: 'c-dur', role: 'gridcell' }, formatDuration(row.duration)),
-    h('div', { class: 'c-res', role: 'gridcell', title: resources }, resources),
+    app.cols.dur ? h('div', { class: 'c-dur', role: 'gridcell' }, formatDuration(row.duration)) : null,
+    app.cols.res ? h('div', { class: 'c-res', role: 'gridcell', title: resources }, resources) : null,
   );
   return el;
 }
@@ -653,10 +698,13 @@ function renderBody() {
 function linksLayer(rowTop) {
   const { start, ppd, width } = app.range;
   const svg = svgEl('svg', { class: 'links', width, height: Math.max(app.visible.length * ROW_H, 1), 'aria-hidden': 'true' });
-  const marker = svgEl('marker', { id: 'arrow', viewBox: '0 0 8 8', refX: 7, refY: 4, markerWidth: 7, markerHeight: 7, orient: 'auto' });
-  marker.append(svgEl('path', { d: 'M0,0 L8,4 L0,8 z', fill: 'currentColor' }));
   const defs = svgEl('defs');
-  defs.append(marker);
+  // The head is drawn in its own color so that the arrows of the selected task can be highlighted (see updateSelection).
+  for (const [id, cls] of [['arrow', 'head'], ['arrow-hi', 'head hi']]) {
+    const marker = svgEl('marker', { id, viewBox: '0 0 8 8', refX: 7, refY: 4, markerWidth: 7, markerHeight: 7, orient: 'auto' });
+    marker.append(svgEl('path', { d: 'M0,0 L8,4 L0,8 z', class: cls }));
+    defs.append(marker);
+  }
   svg.append(defs);
   for (const row of app.visible) {
     for (const pred of taskById(row.id).predecessors) {
@@ -666,17 +714,36 @@ function linksLayer(rowTop) {
       const y1 = rowTop.get(from.id) + ROW_H / 2;
       const x2 = (row.startDay - start) * ppd;
       const y2 = rowTop.get(row.id) + ROW_H / 2;
+      // The arrow head is about 8px long and covers the end of the line, so the last leg must be longer than that
+      // or only the head is left.
       let d;
-      if (x2 - x1 >= 12) {
+      if (x2 - x1 >= 6 + LINK_LEG) {
         d = `M${x1},${y1} H${x1 + 6} V${y2} H${x2}`;
       } else {
-        const ym = y2 > y1 ? y1 + ROW_H / 2 : y1 - ROW_H / 2;
-        d = `M${x1},${y1} H${x1 + 6} V${ym} H${x2 - 6} V${y2} H${x2}`;
+        // Turn in the gap next to the target row, so the line never cuts through the bars between the two rows
+        // and the links into one task merge into a single line.
+        const ym = y2 > y1 ? y2 - ROW_H / 2 : y2 + ROW_H / 2;
+        d = `M${x1},${y1} H${x1 + 6} V${ym} H${x2 - LINK_LEG} V${y2} H${x2}`;
       }
-      svg.append(svgEl('path', { class: 'link', d, 'marker-end': 'url(#arrow)' }));
+      svg.append(svgEl('path', { class: 'link', d, 'marker-end': 'url(#arrow)', 'data-from': from.id, 'data-to': row.id }));
     }
   }
   return svg;
+}
+
+// Highlights the arrows into and out of the selected task and fades the rest.
+function updateLinks() {
+  const svg = ui.bt.querySelector('.links');
+  if (!svg) return;
+  const related = [...svg.querySelectorAll('path.link')].filter((path) => app.selected && (path.dataset.from === app.selected || path.dataset.to === app.selected));
+  svg.classList.toggle('focus', related.length > 0);
+  for (const path of svg.querySelectorAll('path.link')) {
+    const on = related.includes(path);
+    path.classList.toggle('rel', on);
+    path.setAttribute('marker-end', on ? 'url(#arrow-hi)' : 'url(#arrow)');
+  }
+  // Later elements are drawn on top, so move the highlighted arrows to the end.
+  svg.append(...related);
 }
 
 function updateSelection() {
@@ -692,6 +759,7 @@ function updateSelection() {
     band.hidden = top === undefined;
     if (top !== undefined) band.style.top = `${top}px`;
   }
+  updateLinks();
 }
 
 function select(id) {
@@ -702,6 +770,17 @@ function select(id) {
   renderPanel();
   renderStatus();
   post('/api/select', { id }).catch(() => {});
+}
+
+// Clicking a task also brings up its details; selecting with the keyboard leaves the panel as it is.
+function showDetail(id) {
+  select(id);
+  app.tab = 'task';
+  renderPanel();
+  if (app.panelOpen) return;
+  app.panelOpen = true;
+  ui.panel.hidden = false;
+  renderTop();
 }
 
 function renderStatus() {
@@ -724,7 +803,7 @@ function renderStatus() {
 function beginDrag(event, row, bar) {
   if (event.button !== 0) return;
   event.preventDefault();
-  select(row.id);
+  showDetail(row.id);
   bar.setPointerCapture(event.pointerId);
   bar.classList.add('dragging');
   app.drag = { row, bar, mode: event.target.classList.contains('grip') ? 'resize' : 'move', x0: event.clientX, delta: 0, width: bar.offsetWidth };
@@ -1019,16 +1098,9 @@ ui.bl.addEventListener('keydown', (event) => {
 
 ui.bt.addEventListener('click', (event) => {
   const bar = event.target.closest('.bar, .sbar');
-  if (bar) return select(bar.dataset.id);
+  if (bar) return showDetail(bar.dataset.id);
   const row = app.visible[Math.floor((event.clientY - ui.bt.getBoundingClientRect().top) / ROW_H)];
-  if (row) select(row.id);
-});
-
-ui.bt.addEventListener('dblclick', (event) => {
-  if (!event.target.closest('.bar, .sbar') || app.panelOpen) return;
-  app.panelOpen = true;
-  renderTop();
-  renderChart();
+  if (row) showDetail(row.id);
 });
 
 let resizeTimer;

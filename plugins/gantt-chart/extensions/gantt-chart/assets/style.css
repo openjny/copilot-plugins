@@ -77,6 +77,7 @@ button, input, select, textarea { font: inherit; color: inherit; }
 .save.error { color: var(--danger); }
 .toolbar { display: flex; align-items: center; gap: 4px; padding: 6px 12px; border-bottom: 1px solid var(--line); background: var(--bg); flex-wrap: wrap; }
 .toolbar .sep { width: 1px; height: 18px; background: var(--line); margin: 0 6px; }
+.toolbar .spacer { flex: 1; }
 .toolbar select { height: 28px; border: 1px solid var(--line); border-radius: 6px; background: var(--bg); padding: 0 6px; }
 .banner { padding: 8px 12px; background: color-mix(in srgb, var(--danger) 14%, var(--bg)); color: var(--fg); border-bottom: 1px solid var(--danger); }
 
@@ -86,10 +87,11 @@ button, input, select, textarea { font: inherit; color: inherit; }
 .hl, .ht { position: sticky; top: 0; height: var(--head-h); background: var(--head); border-bottom: 1px solid var(--line); }
 .hl { left: 0; z-index: 6; }
 .ht { z-index: 4; }
-.bl { position: sticky; left: 0; z-index: 3; min-height: var(--body-min, 0); background: var(--bg); border-right: 1px solid var(--line); outline-offset: -2px; }
+/* z-index 5 keeps the list above the dependency arrows (3) that slide under it when the timeline is scrolled */
+.bl { position: sticky; left: 0; z-index: 5; min-height: var(--body-min, 0); background: var(--bg); border-right: 1px solid var(--line); outline-offset: -2px; }
 .bt { position: relative; min-height: var(--body-min, 0); background-image: linear-gradient(to bottom, transparent calc(var(--row-h) - 1px), var(--line) calc(var(--row-h) - 1px)); background-size: 100% var(--row-h); overflow: hidden; }
 
-.cols { display: grid; grid-template-columns: 36px 1fr 56px 88px; align-items: center; }
+.cols { display: grid; grid-template-columns: var(--cols, 36px 1fr 56px 88px); align-items: center; }
 .hl .cols { height: 100%; font-size: 12px; color: var(--muted); font-weight: 600; }
 .hl .cols > div { padding: 0 6px; }
 .splitter { position: absolute; top: 0; right: -4px; width: 8px; height: 100%; cursor: col-resize; z-index: 7; }
@@ -139,9 +141,15 @@ button, input, select, textarea { font: inherit; color: inherit; }
 .sbar::before { left: 0; }
 .sbar::after { right: 0; }
 .sbar.sel { outline: 2px solid var(--accent); outline-offset: 1px; }
-.after-label { position: absolute; height: 18px; display: flex; align-items: center; padding-left: 6px; font-size: 11px; color: var(--muted); white-space: nowrap; pointer-events: none; z-index: 2; }
-.links { position: absolute; inset: 0; pointer-events: none; color: var(--muted); z-index: 3; }
+/* The label sits right of the bar, clear of the link that leaves the bar end, and above the links so they do not run through the text */
+.after-label { position: absolute; height: 18px; display: flex; align-items: center; margin-left: 10px; padding: 0 4px; border-radius: 3px; background: color-mix(in srgb, var(--bg) 88%, transparent); font-size: 11px; color: var(--muted); white-space: nowrap; pointer-events: none; z-index: 3; }
+.links { position: absolute; inset: 0; pointer-events: none; color: var(--muted); z-index: 2; }
 .links path.link { fill: none; stroke: currentColor; stroke-width: 1.2; }
+.links .head { fill: var(--muted); }
+.links .head.hi { fill: var(--accent); }
+/* While a task is selected, its own arrows are drawn in the accent color and the others fade */
+.links.focus path.link { opacity: 0.3; }
+.links.focus path.link.rel { opacity: 1; stroke: var(--accent); stroke-width: 1.8; }
 
 /* Detail panel */
 .panel { width: 300px; flex: none; border-left: 1px solid var(--line); overflow: auto; background: var(--bg); }
