@@ -79,6 +79,7 @@ const app = {
   editing: null,
   editText: '',
   drag: null,
+  lastClick: null,
   pendingRender: false,
   saving: 'saved',
   leftW: Math.max(240, Math.min(360, Math.round(window.innerWidth * 0.4))),
@@ -780,6 +781,9 @@ function showMenu(at, items) {
   ui.ctx.querySelector('button:not(:disabled)')?.focus();
 }
 
+/** Folds a parent task (hides its children) or unfolds it. */
+const toggleFold = (id) => send([{ op: 'update', id, collapsed: !taskById(id).collapsed }]);
+
 /** The menu for a task: the right-clicked task is selected first, unless it is already part of the selection. */
 function taskMenu(event, id) {
   if (!app.picked.has(id)) select(id);
@@ -796,6 +800,7 @@ function taskMenu(event, id) {
       { label: t('ctx.insertBelow'), icon: 'plus', run: () => insertTask('after', id) },
       { label: t('ctx.addChild'), icon: 'indent', run: () => addChild(id) },
     );
+    if (row.summary) items.push({ label: list[i].collapsed ? t('ctx.unfold') : t('ctx.fold'), icon: 'chevron', hint: t('ctx.dblclick'), run: () => toggleFold(id) });
   }
   items.push({ label: several ? t('ctx.duplicateMany', { count: ids.length }) : t('ctx.duplicate'), icon: 'copy', hint: 'Ctrl+D', run: () => duplicateTasks(ids) });
   if (!several) {
@@ -817,6 +822,7 @@ ui.bt.addEventListener('contextmenu', (event) => {
   const el = event.target.closest('.bar, .sbar');
   if (el) taskMenu(event, el.dataset.id);
 });
+// Double-clicking the bar of a parent task folds or unfolds it: see isDoubleClick and endDrag.
 ui.bl.addEventListener('contextmenu', (event) => {
   // While a name is being typed the browser's own menu (copy, paste) is more useful.
   if (isTyping(event.target)) return;
@@ -1227,7 +1233,8 @@ function renderBody() {
       const sbar = h('div', { class: `sbar c-${colorOf(row)}${selected ? ' sel' : ''}`, 'data-id': row.id, role: 'img', 'aria-label': label, title: label, style: { left: `${left}px`, width: `${width}px`, top: `${y + (named ? lh : 0)}px` } });
       wireBar(sbar, row);
       parts.push(sbar);
-      if (named) parts.push(h('div', { class: 'sum-label', style: { left: `${left}px`, top: `${y}px` } }, `${task.name}  ${percent}%`));
+      // A folded parent shows ▸ before its name: with the list hidden this is the only sign that tasks are tucked away under it.
+      if (named) parts.push(h('div', { class: 'sum-label', style: { left: `${left}px`, top: `${y}px` } }, `${task.collapsed ? '▸ ' : ''}${task.name}  ${percent}%`));
       else parts.push(h('div', { class: 'after-label', style: { left: `${left + width}px`, top: `${top + 5}px` } }, `${percent}%`));
       continue;
     }
@@ -1681,6 +1688,18 @@ function autoScroll() {
   requestAnimationFrame(step);
 }
 
+/**
+ * Whether this click on a bar is the second of a double-click. The browser's own dblclick event does not reach the bars
+ * (a press is handled as the start of a drag, with the pointer captured), so two clicks close together are counted here.
+ */
+const DOUBLE_CLICK_MS = 500;
+function isDoubleClick(event, id) {
+  const last = app.lastClick;
+  const again = Boolean(last) && last.id === id && event.timeStamp - last.time < DOUBLE_CLICK_MS && Math.hypot(event.clientX - last.x, event.clientY - last.y) < 8;
+  app.lastClick = again ? null : { id, time: event.timeStamp, x: event.clientX, y: event.clientY };
+  return again;
+}
+
 async function endDrag(event) {
   const drag = app.drag;
   if (!drag) return;
@@ -1692,6 +1711,7 @@ async function endDrag(event) {
   if (event.type === 'pointerup') {
     if (drag.mode === 'move' && drag.days) ops = [{ op: 'slide', ids: drag.group, days: drag.days }];
     else if (drag.mode === 'resize' && drag.delta && resizeTarget(drag).end !== drag.row.endDay) ops = [{ op: 'update', id: drag.row.id, end: formatDate(resizeTarget(drag).end) }];
+    else if (drag.mode === 'move' && !drag.moved && !drag.modifier && drag.row.summary && isDoubleClick(event, drag.row.id)) ops = [{ op: 'update', id: drag.row.id, collapsed: !taskById(drag.row.id).collapsed }];
     else if (drag.collapse && !drag.moved) showDetail(drag.row.id);
   }
   if (ops) await send(ops);
