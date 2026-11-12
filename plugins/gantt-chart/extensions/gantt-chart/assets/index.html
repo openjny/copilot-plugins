@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light dark">
+  <title>ガントチャート</title>
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+  <div id="start" class="start" hidden></div>
+  <div id="editor" class="editor" hidden>
+    <header id="topbar" class="topbar"></header>
+    <div id="toolbar" class="toolbar" role="toolbar" aria-label="タスクの操作"></div>
+    <div id="banner" class="banner" role="alert" hidden></div>
+    <div class="main">
+      <div id="scroller" class="scroller">
+        <div id="grid" class="grid">
+          <div id="hl" class="hl"></div>
+          <div id="ht" class="ht"></div>
+          <div id="bl" class="bl" role="treegrid" aria-label="タスク一覧" tabindex="0"></div>
+          <div id="bt" class="bt"></div>
+        </div>
+      </div>
+      <aside id="panel" class="panel" aria-label="詳細"></aside>
+    </div>
+    <footer id="status" class="status" role="status"></footer>
+  </div>
+  <dialog id="versions" class="dlg" aria-labelledby="versions-title"></dialog>
+  <dialog id="confirm" class="dlg" aria-labelledby="confirm-text"></dialog>
+  <div id="toast" class="toast" role="status" aria-live="polite"></div>
+  <div id="tip" class="tip" hidden></div>
+  <script type="module" src="/app.js"></script>
+</body>
+</html>

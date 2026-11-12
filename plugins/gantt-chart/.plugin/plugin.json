@@ -1,0 +1,19 @@
+{
+  "name": "gantt-chart",
+  "version": "1.0.0",
+  "description": "A canvas with an editable Gantt chart saved in a JSON file: task table with parent tasks, timeline bars you can drag, dependencies, progress, color labels, resources and saved versions. The agent edits the same chart through actions.",
+  "author": {
+    "name": "openjny",
+    "url": "https://github.com/openjny"
+  },
+  "homepage": "https://github.com/openjny/copilot-plugins/tree/main/plugins/gantt-chart",
+  "repository": "https://github.com/openjny/copilot-plugins",
+  "license": "MIT",
+  "keywords": [
+    "canvas",
+    "gantt",
+    "schedule",
+    "planning"
+  ],
+  "extensions": "extensions/"
+}

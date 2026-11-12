@@ -26,6 +26,7 @@ copilot plugin install zoom-out@openjny
 copilot plugin install plan-skill@openjny
 copilot plugin install writing-skills@openjny
 copilot plugin install slide-cookbook@openjny
+copilot plugin install gantt-chart@openjny
 ```
 
 List installed plugins:
@@ -47,6 +48,7 @@ copilot plugin list
 | [`plan-skill`](plugins/plan-skill/) | 実行環境に適応した計画作成。計画のみを行い、実装しない。 |
 | [`writing-skills`](plugins/writing-skills/) | `writing-style` による文章を書くときの共通原則（日英の表現、技術文書の書き方、補助 lint）、`markdown-check` によるリンク・Markdown構造の検証。 |
 | [`slide-cookbook`](plugins/slide-cookbook/) | Finds slide structure, diagram, and design references from Slideland when creating or editing slides. |
+| [`gantt-chart`](plugins/gantt-chart/) | A canvas with an editable Gantt chart saved in a JSON file: parent tasks, draggable bars, dependencies, progress, color labels, resources and saved versions, edited by the user and by the agent. |
 
 ## 移行・保守
 

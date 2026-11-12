@@ -2,7 +2,7 @@
   "name": "openjny",
   "metadata": {
     "description": "Public GitHub Copilot plugins from openjny",
-    "version": "1.4.1"
+    "version": "1.5.0"
   },
   "owner": {
     "name": "openjny",
@@ -167,6 +167,25 @@
       ],
       "license": "MIT",
       "source": "./plugins/slide-cookbook"
+    },
+    {
+      "name": "gantt-chart",
+      "version": "1.0.0",
+      "description": "A canvas with an editable Gantt chart saved in a JSON file: parent tasks, draggable bars, dependencies, progress, color labels, resources and saved versions, edited by the user and by the agent.",
+      "author": {
+        "name": "openjny",
+        "url": "https://github.com/openjny"
+      },
+      "repository": "https://github.com/openjny/copilot-plugins",
+      "homepage": "https://github.com/openjny/copilot-plugins/tree/main/plugins/gantt-chart",
+      "keywords": [
+        "canvas",
+        "gantt",
+        "schedule",
+        "planning"
+      ],
+      "license": "MIT",
+      "source": "./plugins/gantt-chart"
     }
   ]
 }
