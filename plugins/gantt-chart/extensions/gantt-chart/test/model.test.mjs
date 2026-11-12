@@ -57,14 +57,19 @@ test('setting the start of a dependent task changes the lag instead', () => {
   assert.equal(task.start, '2026-11-24');
 });
 
-test('a dependent task cannot start before its predecessors end', () => {
-  const doc = sample();
-  const before = serializeDoc(doc);
-  assert.throws(
-    () => ops(doc, [{ op: 'update', id: 'd', start: '2026-11-19' }]),
-    (error) => error.code === 'dependency_violation' && error.message.includes('2026-11-20'),
-  );
-  assert.equal(serializeDoc(doc), before);
+test('a start before the predecessors end becomes the first day they allow', () => {
+  const doc = ops(sample(), [{ op: 'update', id: 'd', predecessors: [{ task: 'c', lag: 2 }] }]);
+  const run = applyOps(doc, [{ op: 'update', id: 'd', start: '2026-11-19' }], { now: NOW });
+  const task = run.doc.tasks.find((item) => item.id === 'd');
+  assert.equal(task.start, '2026-11-20');
+  assert.deepEqual(task.predecessors, [{ task: 'c', lag: 0 }]);
+  assert.deepEqual(run.results[0].adjusted, { start: '2026-11-20' });
+});
+
+test('a start the predecessors allow is kept and not reported as adjusted', () => {
+  const run = applyOps(sample(), [{ op: 'update', id: 'd', start: '2026-11-24' }], { now: NOW });
+  assert.equal(run.doc.tasks.find((item) => item.id === 'd').start, '2026-11-24');
+  assert.equal(run.results[0].adjusted, undefined);
 });
 
 test('moving a dependent task earlier only lowers the lag of the predecessor that decides the start', () => {

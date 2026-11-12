@@ -61,7 +61,7 @@ function chartView(chart, extra = {}) {
 const idProperty = { type: 'string', description: 'Task id, as listed by get_chart (letters, digits, "_" and "-", up to 32 characters).' };
 const taskFields = {
   name: { type: 'string', description: 'Task name. For "project" and "snapshot" it is the project or version name.' },
-  start: { type: 'string', description: 'Start date, YYYY-MM-DD. A weekend or holiday moves to the next working day. For a task with predecessors the start follows them, so this changes their lags; a date before the predecessors end is rejected.' },
+  start: { type: 'string', description: 'Start date, YYYY-MM-DD. A weekend or holiday moves to the next working day. For a task with predecessors the start follows them, so this changes their lags; a date before the predecessors end becomes the first day they allow, and the op result reports it in "adjusted.start".' },
   end: { type: 'string', description: 'Last day, YYYY-MM-DD; sets the duration. Do not combine with duration.' },
   duration: { type: ['integer', 'string'], description: 'Working days: 3, "3d" or "2w" (a week is 5 working days). Do not combine with end.' },
   progress: { type: 'number', minimum: 0, maximum: 100, description: 'Percent complete. Not for a parent task: it is computed from its children.' },

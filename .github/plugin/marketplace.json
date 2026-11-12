@@ -170,7 +170,7 @@
     },
     {
       "name": "gantt-chart",
-      "version": "1.1.1",
+      "version": "1.1.2",
       "description": "A canvas with an editable Gantt chart saved in a JSON file: parent tasks, draggable bars, dependencies, progress, color labels, resources and saved versions, edited by the user and by the agent.",
       "author": {
         "name": "openjny",

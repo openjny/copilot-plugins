@@ -143,6 +143,12 @@ async function send(ops) {
     const data = await post('/api/ops', { ops });
     applyState(data.state);
     setSaving('saved');
+    const moved = data.results.find((result) => result.adjusted?.start);
+    if (moved) {
+      toast(`先行タスクの終了後（${moved.adjusted.start}）が最も早い開始日のため、開始日を補正しました。`, 'info');
+      app.panelKey = '';
+      renderPanel();
+    }
     return data.results;
   } catch (error) {
     setSaving('error');
@@ -295,10 +301,13 @@ function renderTop() {
             type: 'button',
             'aria-pressed': String(app.zoom === zoom),
             onclick: () => {
+              const viewport = ui.scroller.clientWidth - app.leftW;
+              const center = app.range ? app.range.start + (ui.scroller.scrollLeft + viewport / 2) / app.range.ppd : null;
               app.zoom = zoom;
               renderTop();
               renderChart();
-              ui.scroller.scrollLeft = 0;
+              // Keep the date at the center of the view where it was.
+              ui.scroller.scrollLeft = center === null ? 0 : Math.max(0, (center - app.range.start) * app.range.ppd - viewport / 2);
             },
           },
           label,
@@ -806,14 +815,17 @@ function beginDrag(event, row, bar) {
   showDetail(row.id);
   bar.setPointerCapture(event.pointerId);
   bar.classList.add('dragging');
-  app.drag = { row, bar, mode: event.target.classList.contains('grip') ? 'resize' : 'move', x0: event.clientX, delta: 0, width: bar.offsetWidth };
+  const preds = taskById(row.id).predecessors;
+  // The first day the predecessors allow; a bar cannot be dragged before it.
+  const earliest = preds.length ? Math.max(...preds.map((pred) => app.cal.add(rowById(pred.task).endDay, 1))) : -Infinity;
+  app.drag = { row, bar, mode: event.target.classList.contains('grip') ? 'resize' : 'move', x0: event.clientX, delta: 0, width: bar.offsetWidth, earliest };
 }
 
 function dragTarget(drag) {
   const { row, delta, mode } = drag;
   if (mode === 'move') {
-    const start = app.cal.next(row.startDay + delta);
-    return { start, end: app.cal.add(start, row.duration - 1) };
+    const start = Math.max(app.cal.next(row.startDay + delta), drag.earliest);
+    return { start, end: app.cal.add(start, row.duration - 1), limited: start === drag.earliest && row.startDay + delta < start };
   }
   const end = app.cal.prev(row.endDay + delta);
   return { start: row.startDay, end: Math.max(end, row.startDay) };
@@ -824,11 +836,11 @@ function onDragMove(event) {
   if (!drag) return;
   const ppd = app.range.ppd;
   drag.delta = Math.round((event.clientX - drag.x0) / ppd);
-  if (drag.mode === 'move') drag.bar.style.transform = `translateX(${drag.delta * ppd}px)`;
+  if (drag.mode === 'move') drag.bar.style.transform = `translateX(${Math.max(drag.delta, drag.earliest - drag.row.startDay) * ppd}px)`;
   else drag.bar.style.width = `${Math.max(ppd, drag.width + drag.delta * ppd)}px`;
   const target = dragTarget(drag);
   ui.tip.hidden = false;
-  ui.tip.textContent = `${formatDate(target.start)} – ${formatDate(target.end)}（${formatDuration(app.cal.count(target.start, target.end))}）`;
+  ui.tip.textContent = `${formatDate(target.start)} – ${formatDate(target.end)}（${formatDuration(app.cal.count(target.start, target.end))}）${target.limited ? ' 先行タスクの終了後が下限' : ''}`;
   ui.tip.style.left = `${event.clientX + 14}px`;
   ui.tip.style.top = `${event.clientY + 16}px`;
 }

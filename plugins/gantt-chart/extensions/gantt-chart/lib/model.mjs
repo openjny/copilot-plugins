@@ -465,25 +465,18 @@ function patchTask(d, i, patch, cal) {
   if (patch.duration !== undefined) task.duration = patch.duration;
 
   const driven = task.predecessors.length > 0;
+  let adjusted = null;
   if (patch.start !== undefined) {
     const wanted = cal.next(parseDate(patch.start));
     if (driven) {
       // The start follows the predecessors, so moving it means changing their lags.
       const plan = schedule(d, cal);
-      const delta = cal.diff(plan.rows[i].startDay, wanted);
+      // A start before the predecessors end is not possible: it becomes the first day they allow.
+      const earliest = Math.max(...task.predecessors.map((pred) => cal.add(plan.byId.get(pred.task).endDay, 1)));
+      const target = Math.max(wanted, earliest);
+      if (target > wanted) adjusted = { start: formatDate(target) };
+      const delta = cal.diff(plan.rows[i].startDay, target);
       if (delta) {
-        let limit = null;
-        for (const pred of task.predecessors) {
-          const row = plan.byId.get(pred.task);
-          const day = cal.add(row.endDay, 1);
-          if (limit === null || day > limit.day) limit = { day, row };
-        }
-        if (wanted < limit.day) {
-          fail(
-            'dependency_violation',
-            `「${task.name}」は先行タスク「${d.tasks[limit.row.index].name}」の終了（${formatDate(limit.row.endDay)}）より前には開始できません。最も早い開始日は ${formatDate(limit.day)} です。`,
-          );
-        }
         // A predecessor that does not decide the start would go below 0; it stays at 0 and still ends before the start.
         task.predecessors = task.predecessors.map((pred) => {
           const lag = Math.max(0, pred.lag + delta);
@@ -502,6 +495,7 @@ function patchTask(d, i, patch, cal) {
     task.duration = cal.count(first, last);
     if (task.duration > MAX_DURATION) fail('invalid_input', `期間は ${MAX_DURATION} 稼働日までです。`);
   }
+  return adjusted;
 }
 
 function localStamp(now) {
@@ -544,13 +538,13 @@ function runOp(d, op, ctx) {
       const above = at.index > 0 ? schedule(d, cal).rows[at.index - 1] : null;
       task.start = formatDate(above ? above.startDay : cal.next(todayDay(now)));
       d.tasks.splice(at.index, 0, task);
-      patchTask(d, at.index, patch, cal);
-      return { op: 'add', id };
+      const adjusted = patchTask(d, at.index, patch, cal);
+      return { op: 'add', id, ...(adjusted && { adjusted }) };
     }
     case 'update': {
       allowKeys(op, ['op', 'id', 'end', ...TASK_FIELDS]);
-      patchTask(d, findIndex(d, op.id, 'id'), readPatch(op), cal);
-      return { op: 'update', id: op.id };
+      const adjusted = patchTask(d, findIndex(d, op.id, 'id'), readPatch(op), cal);
+      return { op: 'update', id: op.id, ...(adjusted && { adjusted }) };
     }
     case 'delete': {
       allowKeys(op, ['op', 'id']);
