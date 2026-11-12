@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { SCHEMA, readDoc, serializeDoc, toTree } from '../lib/format.mjs';
 import { setLocale } from '../lib/i18n.mjs';
-import { MAX_DURATION, MAX_LAG, MAX_LEVEL, MAX_TASKS, MAX_VERSIONS, PALETTE, applyOps, describe, emptyDoc, finalize, formatDate, makeCalendar, maxSlideEarlier, parseDate, parseDuration, schedule } from '../lib/model.mjs';
+import { MAX_DURATION, MAX_LAG, MAX_LEVEL, MAX_TASKS, MAX_VERSIONS, PALETTE, applyOps, describe, emptyDoc, finalize, formatDate, makeCalendar, maxSlideEarlier, parseDate, parseDuration, schedule, weekStartOnOrBefore } from '../lib/model.mjs';
 
 setLocale('en');
 const NOW = new Date(2026, 10, 12, 9, 30);
@@ -298,6 +298,70 @@ test('holidays change the working days', () => {
   assert.deepEqual([by.c.start, by.c.end], ['2026-11-19', '2026-11-20']);
 });
 
+test('a worked weekend day counts as a working day, and a holiday on it does not matter', () => {
+  const cal = makeCalendar({ holidays: ['2026-11-21'], workdays: ['2026-11-21', '2026-11-22'] });
+  assert.deepEqual(['2026-11-20', '2026-11-21', '2026-11-22', '2026-11-23'].map((text) => cal.isWorkday(day(text))), [true, true, true, true]);
+  assert.equal(cal.count(day('2026-11-20'), day('2026-11-23')), 4);
+  const doc = ops(sample(), [{ op: 'project', workdays: ['2026-11-21'] }, { op: 'update', id: 'b', duration: 5 }]);
+  assert.equal(doc.tasks.find((task) => task.id === 'b').start, '2026-11-16');
+  const by = Object.fromEntries(describe(doc).tasks.map((task) => [task.id, task]));
+  assert.equal(by.b.end, '2026-11-20');
+  const saturday = ops(sample(), [{ op: 'project', workdays: ['2026-11-21'] }, { op: 'update', id: 'b', duration: 6 }]);
+  assert.equal(describe(saturday).tasks.find((task) => task.id === 'b').end, '2026-11-21');
+  assert.throws(() => ops(sample(), [{ op: 'project', workdays: ['2026-11-18'] }]), (error) => error.key === 'err.expect' && /Saturdays or Sundays/.test(error.message));
+  assert.deepEqual(describe(doc).project.workdays, ['2026-11-21']);
+});
+
+test('weeks start on Monday unless the project says Sunday', () => {
+  const friday = day('2026-11-13');
+  assert.equal(formatDate(weekStartOnOrBefore(friday)), '2026-11-09');
+  assert.equal(formatDate(weekStartOnOrBefore(friday, 'sun')), '2026-11-08');
+  assert.equal(formatDate(weekStartOnOrBefore(day('2026-11-15'), 'sun')), '2026-11-15');
+  assert.equal(formatDate(weekStartOnOrBefore(day('2026-11-15'))), '2026-11-09');
+  assert.equal(emptyDoc().project.weekStart, 'mon');
+  assert.equal(ops(sample(), [{ op: 'project', weekStart: 'sun' }]).project.weekStart, 'sun');
+  assert.throws(() => ops(sample(), [{ op: 'project', weekStart: 'tue' }]), (error) => error.code === 'invalid_input');
+});
+
+test('the file leaves out what is at its default, and keeps worked weekends and the week start', () => {
+  const plain = JSON.parse(serializeDoc(sample()));
+  assert.deepEqual(Object.keys(plain.project), ['name', 'holidays']);
+  const set = ops(sample(), [{ op: 'project', workdays: ['2026-11-21'], weekStart: 'sun' }]);
+  const raw = JSON.parse(serializeDoc(set));
+  assert.deepEqual([raw.project.workdays, raw.project.weekStart], [['2026-11-21'], 'sun']);
+  const again = readDoc(raw);
+  assert.deepEqual([again.project.workdays, again.project.weekStart], [['2026-11-21'], 'sun']);
+  assert.equal(readDoc(plain).project.weekStart, 'mon');
+});
+
+test('estimated and actual hours are separate, add up under a parent, and show in the description', () => {
+  const doc = ops(sample(), [{ op: 'update', id: 'b', estimate: 8, actual: 3.5 }, { op: 'update', id: 'c', estimate: 16 }, { op: 'update', id: 'e', actual: 2 }]);
+  const by = Object.fromEntries(describe(doc).tasks.map((task) => [task.id, task]));
+  assert.deepEqual([by.b.estimate, by.b.actual], [8, 3.5]);
+  assert.deepEqual([by.a.estimate, by.a.actual], [24, 3.5]);
+  assert.deepEqual([by.e.estimate, by.e.actual], [null, 2]);
+  assert.deepEqual([describe(doc).project.estimate, describe(doc).project.actual], [24, 5.5]);
+  assert.throws(() => ops(doc, [{ op: 'update', id: 'a', actual: 1 }]), (error) => error.code === 'summary_field');
+  assert.throws(() => ops(doc, [{ op: 'update', id: 'b', effort: 5 }]), (error) => error.code === 'invalid_input' && /effort/.test(error.message));
+  assert.throws(() => ops(doc, [{ op: 'update', id: 'b', actual: -1 }]), (error) => error.code === 'invalid_input');
+  assert.equal(ops(doc, [{ op: 'update', id: 'b', actual: null }]).tasks.find((task) => task.id === 'b').actual, null);
+  const raw = JSON.parse(serializeDoc(doc));
+  assert.deepEqual([nodeOf(raw.tasks, 'b').estimate, nodeOf(raw.tasks, 'b').actual], [8, 3.5]);
+  assert.equal(nodeOf(raw.tasks, 'a').estimate, undefined);
+});
+
+test('a version 2 file (which calls the estimate "effort") is read as the current version', () => {
+  const raw = JSON.parse(serializeDoc(ops(sample(), [{ op: 'update', id: 'b', estimate: 8 }, { op: 'save_version', name: 'old' }])));
+  raw.version = 2;
+  const old = JSON.parse(JSON.stringify(raw).replaceAll('"estimate"', '"effort"'));
+  const doc = readDoc(old);
+  assert.equal(doc.version, 3);
+  assert.equal(doc.tasks.find((task) => task.id === 'b').estimate, 8);
+  assert.equal(doc.versions[0].tasks.find((task) => task.id === 'b').estimate, 8);
+  assert.equal(JSON.parse(serializeDoc(doc)).version, 3);
+  assert.throws(() => readDoc({ ...old, version: 4 }), (error) => error.code === 'unsupported_version');
+});
+
 test('versions restore the earlier state and keep an automatic backup', () => {
   let doc = ops(sample(), [{ op: 'save_version', name: 'first' }]);
   doc = ops(doc, [{ op: 'delete', id: 'e' }]);
@@ -315,7 +379,7 @@ test('the file keeps the tasks as a tree, one task per line, and round-trips', (
   const doc = sample();
   const text = serializeDoc(doc);
   const raw = JSON.parse(text);
-  assert.equal(raw.version, 2);
+  assert.equal(raw.version, 3);
   assert.match(raw.$schema, /gantt-chart\.schema\.json$/);
   assert.deepEqual(raw.tasks.map((task) => task.id), ['a', 'e']);
   assert.deepEqual(raw.tasks[0].children.map((task) => task.id), ['b', 'c', 'd']);
@@ -336,7 +400,7 @@ test('the limits in the schema are the ones the model enforces', () => {
   assert.equal(SCHEMA.$defs.dependency.properties.lag.maximum, MAX_LAG);
   assert.deepEqual(SCHEMA.$defs.color.enum, PALETTE);
   assert.equal(new RegExp(SCHEMA.$defs.id.pattern).test('a-B_9'), true);
-  assert.equal(SCHEMA.properties.version.const, 2);
+  assert.equal(SCHEMA.properties.version.const, 3);
   assert.ok(MAX_LEVEL >= 8);
 });
 

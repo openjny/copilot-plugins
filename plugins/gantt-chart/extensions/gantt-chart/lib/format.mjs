@@ -44,7 +44,8 @@ function flatten(nodes, level, out, where, ids) {
     if (node.duration !== undefined) task.duration = node.duration;
     if (node.progress !== undefined) task.progress = node.progress;
     if (node.milestone !== undefined) task.milestone = node.milestone;
-    if (node.effort !== undefined) task.effort = node.effort;
+    if (node.estimate !== undefined) task.estimate = node.estimate;
+    if (node.actual !== undefined) task.actual = node.actual;
     if (node.resources !== undefined) task.resources = node.resources;
     if (node.color !== undefined) task.color = node.color;
     if (node.note !== undefined) task.note = node.note;
@@ -64,12 +65,32 @@ function flatten(nodes, level, out, where, ids) {
   return out;
 }
 
-const readProject = (raw) => ({ name: (raw.name ?? '').trim(), holidays: [...(raw.holidays ?? [])].sort() });
+const readProject = (raw) => ({ name: (raw.name ?? '').trim(), holidays: [...(raw.holidays ?? [])].sort(), workdays: [...(raw.workdays ?? [])].sort(), weekStart: raw.weekStart ?? 'mon' });
+
+/** The project as the file holds it: what is still at its default (no worked weekend days, weeks starting on Monday) is left out. */
+const projectNode = (project) => ({ name: project.name, holidays: project.holidays, ...(project.workdays.length && { workdays: project.workdays }), ...(project.weekStart !== 'mon' && { weekStart: project.weekStart }) });
+
+/** A version 2 file differs only in naming its hours "effort" (now "estimate", with "actual" next to it): read it as the current version. */
+function upgradeV2(raw) {
+  const rename = (nodes) => {
+    for (const node of Array.isArray(nodes) ? nodes : []) {
+      if (isObject(node) && node.effort !== undefined) {
+        node.estimate = node.effort;
+        delete node.effort;
+      }
+      if (isObject(node)) rename(node.children);
+    }
+  };
+  rename(raw.tasks);
+  for (const version of Array.isArray(raw.versions) ? raw.versions : []) if (isObject(version)) rename(version.tasks);
+  raw.version = VERSION;
+}
 
 /** Parses the content of a chart file (the parsed JSON). Throws a ModelError that says what is wrong and where. */
 export function readDoc(raw) {
   if (!isObject(raw)) fail('invalid_file', 'err.file.notObject');
   if (raw.format !== FORMAT) fail('invalid_file', 'err.file.notChart', { format: FORMAT });
+  if (raw.version === 2) upgradeV2(raw);
   if (raw.version !== VERSION) fail('unsupported_version', 'err.file.version', { version: JSON.stringify(raw.version), supported: VERSION });
   const result = validate(SCHEMA, raw, { formats: FORMATS });
   if (result.errors.length) fail('invalid_file', 'err.file.schema', { details: describeErrors(result) });
@@ -101,7 +122,8 @@ export function toTree(tasks) {
     const parent = isSummary(tasks, i);
     const node = parent ? { id: task.id, name: task.name } : { id: task.id, name: task.name, start: task.start, duration: task.duration, progress: task.progress };
     if (!parent && task.milestone) node.milestone = true;
-    if (!parent && task.effort !== null) node.effort = task.effort;
+    if (!parent && task.estimate !== null) node.estimate = task.estimate;
+    if (!parent && task.actual !== null) node.actual = task.actual;
     if (task.resources.length) node.resources = task.resources;
     if (task.color !== 'inherit') node.color = task.color;
     if (!parent && task.predecessors.length) node.predecessors = task.predecessors.map((pred) => (pred.lag ? { task: pred.task, lag: pred.lag } : { task: pred.task }));
@@ -133,10 +155,10 @@ function renderNode(node, depth) {
 
 /** The file text: one line per task, so that diffs and hand edits stay easy. */
 export function serializeDoc(doc) {
-  const lines = ['{', `  "$schema": ${JSON.stringify(SCHEMA_URL)},`, `  "format": ${JSON.stringify(FORMAT)},`, `  "version": ${VERSION},`, `  "project": ${JSON.stringify(doc.project)},`, `  "tasks": ${renderTasks(toTree(doc.tasks), 1)}${doc.versions.length ? ',' : ''}`];
+  const lines = ['{', `  "$schema": ${JSON.stringify(SCHEMA_URL)},`, `  "format": ${JSON.stringify(FORMAT)},`, `  "version": ${VERSION},`, `  "project": ${JSON.stringify(projectNode(doc.project))},`, `  "tasks": ${renderTasks(toTree(doc.tasks), 1)}${doc.versions.length ? ',' : ''}`];
   if (doc.versions.length) {
     const versions = doc.versions.map((version) => {
-      const head = JSON.stringify({ id: version.id, name: version.name, createdAt: version.createdAt, project: version.project }).slice(0, -1);
+      const head = JSON.stringify({ id: version.id, name: version.name, createdAt: version.createdAt, project: projectNode(version.project) }).slice(0, -1);
       return `${pad(2)}${head},"tasks":${renderTasks(toTree(version.tasks), 2)}}`;
     });
     lines.push(`  "versions": [\n${versions.join(',\n')}\n  ]`);

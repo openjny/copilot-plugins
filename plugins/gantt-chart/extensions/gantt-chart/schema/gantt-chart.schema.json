@@ -1,15 +1,15 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://raw.githubusercontent.com/openjny/copilot-plugins/main/plugins/gantt-chart/extensions/gantt-chart/schema/gantt-chart.schema.json",
-  "title": "Gantt chart (openjny-gantt-chart, version 2)",
-  "description": "A Gantt chart: a tree of tasks with dates, dependencies and progress, plus saved versions. A parent task has \"children\" and takes its dates, progress and effort from them; a leaf task has \"start\" and \"duration\". Durations count working days (Saturdays, Sundays and the project's holidays are off). Besides this schema, the program checks that ids are unique, that every predecessor exists, that no task is its own predecessor, and that the dependencies have no cycle.",
+  "title": "Gantt chart (openjny-gantt-chart, version 3)",
+  "description": "A Gantt chart: a tree of tasks with dates, dependencies and progress, plus saved versions. A parent task has \"children\" and takes its dates, progress and hours (estimate and actual) from them; a leaf task has \"start\" and \"duration\". Durations count working days (Saturdays, Sundays and the project's holidays are off, unless the project works that weekend day). Besides this schema, the program checks that ids are unique, that every predecessor exists, that no task is its own predecessor, and that the dependencies have no cycle. Version 2 files (which call the estimate \"effort\") are read as version 3.",
   "type": "object",
   "required": ["format", "version", "project", "tasks"],
   "additionalProperties": false,
   "properties": {
     "$schema": { "type": "string", "description": "This schema's URL, so that editors can validate and complete the file." },
     "format": { "const": "openjny-gantt-chart" },
-    "version": { "const": 2, "description": "Version of this file format." },
+    "version": { "const": 3, "description": "Version of this file format." },
     "project": { "$ref": "#/$defs/project" },
     "tasks": {
       "type": "array",
@@ -60,6 +60,18 @@
           "uniqueItems": true,
           "description": "Days off besides Saturdays and Sundays.",
           "items": { "$ref": "#/$defs/date" }
+        },
+        "workdays": {
+          "type": "array",
+          "maxItems": 500,
+          "uniqueItems": true,
+          "description": "Saturdays and Sundays that are worked. Leave it out when there are none.",
+          "items": { "$ref": "#/$defs/date" }
+        },
+        "weekStart": {
+          "enum": ["mon", "sun"],
+          "default": "mon",
+          "description": "The day weeks start on in the timeline."
         }
       }
     },
@@ -91,7 +103,8 @@
         "duration": { "type": "integer", "minimum": 1, "maximum": 3650, "description": "Working days." },
         "progress": { "type": "integer", "minimum": 0, "maximum": 100, "default": 0, "description": "Percent complete." },
         "milestone": { "type": "boolean", "default": false, "description": "A point in time shown as a diamond; its duration is 1." },
-        "effort": { "type": "number", "minimum": 0, "maximum": 1000000, "description": "Effort in hours." },
+        "estimate": { "type": "number", "minimum": 0, "maximum": 1000000, "description": "Estimated effort in hours." },
+        "actual": { "type": "number", "minimum": 0, "maximum": 1000000, "description": "Actual effort in hours." },
         "resources": { "$ref": "#/$defs/resources" },
         "color": { "$ref": "#/$defs/color" },
         "predecessors": { "type": "array", "maxItems": 50, "items": { "$ref": "#/$defs/dependency" } },

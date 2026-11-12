@@ -1,5 +1,5 @@
 import { LOCALES, getLocale, resolveLocale, setLocale, t } from '/i18n.mjs';
-import { FIRST_DAY, PALETTE, applyOps, formatDate, formatDuration, isSummary, makeCalendar, maxSlideEarlier, mondayOnOrBefore, parseDate, parseDuration, schedule, subtreeEnd, todayDay, ymd } from '/model.mjs';
+import { FIRST_DAY, PALETTE, WEEK_STARTS, applyOps, formatDate, formatDuration, isSummary, isWeekend, makeCalendar, maxSlideEarlier, parseDate, parseDuration, schedule, subtreeEnd, todayDay, weekStartOnOrBefore, ymd } from '/model.mjs';
 
 // Row height and pixels per day change with Ctrl+scroll, so they are variables; the ROW_STD / PPD values are the
 // "standard" scale that the day / week / month buttons reset to.
@@ -34,6 +34,7 @@ const ICONS = {
   down: 'M12 5v14M6 13l6 6 6-6',
   sidebar: 'M4 5h16v14H4zM9 5v14',
   tighten: 'M20 12H10M14 8l-4 4 4 4M4 5v14',
+  calendar: 'M4 6h16v14H4zM4 10h16M8 3v4M16 3v4',
   text: 'M4 7V4h16v3M9 20h6M12 4v16',
   sliders: 'M4 6h10M18 6h2M16 4v4M4 12h2M10 12h10M8 10v4M4 18h9M17 18h3M15 16v4',
   history: 'M4 12a8 8 0 1 0 3-6.2M4 4v4h4M12 8v4l3 2',
@@ -143,6 +144,8 @@ function dateFormat(options) {
   return formatters.get(key);
 }
 const dayDate = (day) => new Date(day * 86400000);
+/** The day weeks start on in the timeline: the project's choice (Monday unless it says Sunday). */
+const weekStartDay = () => app.state?.doc?.project?.weekStart ?? 'mon';
 
 // ---- DOM helpers --------------------------------------------------------------------------------------------
 
@@ -1172,6 +1175,35 @@ ui.bl.addEventListener('contextmenu', (event) => {
   const el = event.target.closest('.lrow');
   if (el) taskMenu(event, el.dataset.id);
 });
+// Right-clicking a day in the timeline header switches it between a working day and a day off.
+ui.ht.addEventListener('contextmenu', (event) => {
+  const cell = event.target.closest('.hc[data-day]');
+  if (cell) dayMenu(event, Number(cell.dataset.day));
+});
+
+/** The menu of a day in the timeline header. */
+function dayMenu(event, day) {
+  const date = formatDate(day);
+  showMenu(event, [{ label: t(app.cal.isWorkday(day) ? 'ctx.dayOff' : 'ctx.dayWork', { date }), icon: 'calendar', run: () => toggleWorkday(day) }]);
+}
+
+/**
+ * Switches a day between working and off. Saturdays and Sundays are off unless the project lists them as worked;
+ * the other days are working unless the project lists them as holidays.
+ */
+function toggleWorkday(day) {
+  const { holidays, workdays } = app.state.doc.project;
+  const date = formatDate(day);
+  const working = app.cal.isWorkday(day);
+  const nextHolidays = holidays.filter((item) => item !== date);
+  const nextWorkdays = workdays.filter((item) => item !== date);
+  if (isWeekend(day)) {
+    if (!working) nextWorkdays.push(date);
+  } else if (working) {
+    nextHolidays.push(date);
+  }
+  return send([{ op: 'project', holidays: nextHolidays.sort(), workdays: nextWorkdays.sort() }]);
+}
 document.addEventListener(
   'pointerdown',
   (event) => {
@@ -1221,7 +1253,7 @@ function computeRange(rows) {
   const first = Math.min(today, ...rows.map((row) => row.startDay));
   const last = Math.max(today, ...rows.map((row) => row.endDay));
   const view = app.view ?? { start: Infinity, end: -Infinity };
-  const start = Math.max(MIN_START, mondayOnOrBefore(Math.min(view.start, first - margin)));
+  const start = Math.max(MIN_START, weekStartOnOrBefore(Math.min(view.start, first - margin), weekStartDay()));
   const end = Math.min(MAX_END, Math.max(view.end, last + margin, start + MIN_DAYS[app.zoom] - 1));
   const days = Math.ceil((end - start + 1) / 7) * 7;
   app.view = { start, end: start + days - 1 };
@@ -1294,7 +1326,7 @@ function monthSegments(start, end) {
 /** Sizes of a parent task's bar (thickness, the notch under each end) and its label, for the current row height. */
 function summarySize() {
   const bar = Math.max(6, Math.round(ROW_H * 0.25));
-  return { bar, notch: Math.round(bar * 0.71), label: clamp(Math.round(BAR_H * 0.6), 10, 14) + 3 };
+  return { bar, notch: Math.round(bar * 0.85), label: clamp(Math.round(BAR_H * 0.6), 10, 14) + 3 };
 }
 
 /** Fills the scroller with grid lines even when there are few rows. */
@@ -1366,28 +1398,38 @@ function growRange() {
 function renderLeftHeader() {
   const cell = (text, align) => h('div', align ? { style: { textAlign: align } } : {}, text);
   // Only the row numbers while the list is folded; the name, duration and assignee columns follow when it is open.
-  if (!app.listOpen) return ui.hl.replaceChildren(h('div', { class: 'cols' }, cell('#', 'right')));
-  ui.hl.replaceChildren(h('div', { class: 'cols' }, cell('#', 'right'), cell(t('col.name')), cell(t('col.dur'), 'right'), cell(t('col.res'))));
+  if (!app.listOpen) return ui.hl.replaceChildren(h('div', { class: 'cols' }, cell('#', 'center')));
+  ui.hl.replaceChildren(h('div', { class: 'cols' }, cell('#', 'center'), cell(t('col.name')), cell(t('col.dur'), 'right'), cell(t('col.res'))));
 }
 
 function renderTimelineHeader() {
-  const { start, end, ppd } = app.range;
+  const { start, end, ppd, today } = app.range;
   const top = h('div', { class: 'hrow' });
   const bottom = h('div', { class: 'hrow' });
-  const cell = (parent, from, to, text, cls = '', title = '') =>
-    parent.append(h('div', { class: `hc ${cls}`.trim(), style: { left: `${(from - start) * ppd}px`, width: `${(to - from + 1) * ppd}px` }, title }, text));
+  // The cell that holds today is tinted, so the date in view that is today stands out.
+  const cell = (parent, from, to, text, cls = '', title = '') => {
+    const here = parent === bottom && from <= today && today <= to;
+    parent.append(h('div', { class: `hc ${cls}${here ? ' is-today' : ''}`.trim(), style: { left: `${(from - start) * ppd}px`, width: `${(to - from + 1) * ppd}px` }, title: here ? `${t('chart.today', { date: formatDate(today) })}` : title }, text));
+  };
   const fmt = (day, options) => dateFormat(options).format(dayDate(day));
   const monthLong = { year: 'numeric', month: 'long' };
+  const withYear = { year: 'numeric', month: 'short', day: 'numeric' };
+  const noYear = { month: 'short', day: 'numeric' };
+  // "Dec 7 – Dec 13, 2026" in English, but "2026年12月7日 – 12月13日" in Japanese, where the year comes first, with the start.
+  const weekLabel = (from, to) => {
+    const same = ymd(from).y === ymd(to).y;
+    return getLocale() === 'ja' ? `${fmt(from, withYear)} – ${fmt(to, same ? noYear : withYear)}` : `${fmt(from, same ? noYear : withYear)} – ${fmt(to, withYear)}`;
+  };
   if (app.zoom === 'day') {
-    for (let monday = start; monday <= end; monday += 7) {
-      const same = ymd(monday).y === ymd(monday + 6).y;
-      cell(top, monday, monday + 6, `${fmt(monday, same ? { month: 'short', day: 'numeric' } : { year: 'numeric', month: 'short', day: 'numeric' })} – ${fmt(monday + 6, { year: 'numeric', month: 'short', day: 'numeric' })}`, 'grp');
-    }
+    for (let first = start; first <= end; first += 7) cell(top, first, first + 6, weekLabel(first, first + 6), 'grp');
     // Below 40px a day column has no room for the weekday.
-    for (let day = start; day <= end; day++) cell(bottom, day, day, ppd >= 40 ? `${ymd(day).d} (${fmt(day, { weekday: 'short' })})` : String(ymd(day).d), app.cal.isWorkday(day) ? '' : 'off', formatDate(day));
+    for (let day = start; day <= end; day++) {
+      cell(bottom, day, day, ppd >= 40 ? `${ymd(day).d} (${fmt(day, { weekday: 'short' })})` : String(ymd(day).d), app.cal.isWorkday(day) ? '' : 'off', formatDate(day));
+      bottom.lastElementChild.dataset.day = String(day);
+    }
   } else if (app.zoom === 'week') {
     for (const seg of monthSegments(start, end)) cell(top, seg.from, seg.to, fmt(seg.from, monthLong), 'grp');
-    for (let monday = start; monday <= end; monday += 7) cell(bottom, monday, monday + 6, fmt(monday, { month: 'numeric', day: 'numeric' }), '', formatDate(monday));
+    for (let first = start; first <= end; first += 7) cell(bottom, first, first + 6, fmt(first, { month: 'numeric', day: 'numeric' }), '', formatDate(first));
   } else {
     const months = monthSegments(start, end);
     for (let i = 0; i < months.length; ) {
@@ -1458,7 +1500,7 @@ function leftRow(row) {
         })
       : h('span', { class: 'name', title: task.name }, task.name || t('list.unnamed'));
   const resources = task.resources.join(', ');
-  const attrs = { class: `cols lrow${selected ? ' sel' : ''}${row.summary ? ' summary' : ''}`, role: 'row', 'aria-level': row.level + 1, 'aria-selected': String(selected), 'data-id': row.id };
+  const attrs = { class: `cols lrow tc-${colorOf(row)}${selected ? ' sel' : ''}${row.summary ? ' summary' : ''}`, role: 'row', 'aria-level': row.level + 1, 'aria-selected': String(selected), 'data-id': row.id };
   if (row.summary) attrs['aria-expanded'] = String(!task.collapsed);
   const el = h(
     'div',
@@ -1558,8 +1600,8 @@ function renderBody() {
       wireBar(sbar, row);
       parts.push(sbar);
       // A folded parent shows ▸ before its name: with the list hidden this is the only sign that tasks are tucked away under it.
-      if (named) parts.push(h('div', { class: 'sum-label', style: { left: `${left}px`, top: `${y}px` } }, `${task.collapsed ? '▸ ' : ''}${task.name}  ${percent}%`, lateTag()));
-      else parts.push(h('div', { class: 'after-label', style: { left: `${left + width}px`, top: `${top + 5}px` } }, `${percent}%`, lateTag()));
+      if (named) parts.push(h('div', { class: `sum-label tc-${colorOf(row)}`, style: { left: `${left}px`, top: `${y}px` } }, `${task.collapsed ? '▸ ' : ''}${task.name}  ${percent}%`, lateTag()));
+      else parts.push(h('div', { class: `after-label tc-${colorOf(row)}`, style: { left: `${left + width}px`, top: `${top + 5}px` } }, `${percent}%`, lateTag()));
       continue;
     }
     if (row.milestone) {
@@ -1569,7 +1611,7 @@ function renderBody() {
       const diamond = h('div', { class: `bar ms c-${colorOf(row)}${selected ? ' sel' : ''}${late}`, 'data-id': row.id, role: 'img', 'aria-label': label, title: label, style: { left: `${cx - size / 2}px`, width: `${size}px`, top: `${top + 5}px` } });
       wireBar(diamond, row);
       parts.push(diamond);
-      if (named || lateDays) parts.push(h('div', { class: 'after-label', style: { left: `${cx + size / 2}px`, top: `${top + 5}px` } }, named ? task.name : null, lateTag()));
+      if (named || lateDays) parts.push(h('div', { class: `after-label tc-${colorOf(row)}`, style: { left: `${cx + size / 2}px`, top: `${top + 5}px` } }, named ? task.name : null, lateTag()));
       continue;
     }
     // The name goes inside the bar when it fits, otherwise after it; without names only the progress is shown.
@@ -1584,7 +1626,7 @@ function renderBody() {
     wireBar(bar, row);
     parts.push(bar);
     const after = named ? !inside : !inside || app.zoom !== 'day';
-    if (after || lateDays) parts.push(h('div', { class: 'after-label', style: { left: `${left + width}px`, top: `${top + 5}px` } }, after ? (named ? `${task.name}  ${percent}%` : `${percent}%`) : null, lateTag()));
+    if (after || lateDays) parts.push(h('div', { class: `after-label tc-${colorOf(row)}`, style: { left: `${left + width}px`, top: `${top + 5}px` } }, after ? (named ? `${task.name}  ${percent}%` : `${percent}%`) : null, lateTag()));
   }
 
   parts.push(linksLayer(rowTop));
@@ -1786,6 +1828,7 @@ function updateSelection() {
   if (band) {
     band.hidden = top === undefined;
     if (top !== undefined) band.style.top = `${top}px`;
+    band.className = `rowsel tc-${selectedRow() ? colorOf(selectedRow()) : 'blue'}`;
   }
   updateLinks();
   renderConnectors();
@@ -1865,7 +1908,8 @@ function renderStatus() {
   const slash = (day) => formatDate(day).replaceAll('-', '/');
   const parts = [
     t('status.tasks', { value: project.count }),
-    t('status.effort', { value: project.effort === null ? '-' : `${project.effort}h` }),
+    t('status.estimate', { value: project.estimate === null ? '-' : `${project.estimate}h` }),
+    t('status.actual', { value: project.actual === null ? '-' : `${project.actual}h` }),
     t('status.duration', { value: project.count ? formatDuration(project.duration) : '-' }),
     t('status.progress', { value: project.count ? `${project.progress.toFixed(2)}%` : '-' }),
   ];
@@ -1879,7 +1923,7 @@ function renderStatus() {
   else if (row) parts.push(`${taskById(row.id).name}  ${slash(row.startDay)} – ${slash(row.endDay)} (${formatDuration(row.duration)})`);
   const spans = parts.map((text) => h('span', {}, text));
   // The count of late tasks sits right after the project figures, in red.
-  if (late) spans.splice(4, 0, h('span', { class: 'late' }, t('status.late', { value: late })));
+  if (late) spans.splice(5, 0, h('span', { class: 'late' }, t('status.late', { value: late })));
   ui.status.replaceChildren(...spans);
 }
 
@@ -2112,12 +2156,34 @@ ui.bt.addEventListener('pointermove', (event) => {
   if (app.marquee) return moveMarquee(app.marquee, event);
   if (app.link?.sticky) updateLink(event);
   revealConnectors(event);
+  hoverToday(event);
 });
+
+/** The line of today is too thin to carry a title, so the hint is shown while the pointer rests on it. */
+function hoverToday(event) {
+  const line = ui.bt.querySelector('.today');
+  const x = line ? line.getBoundingClientRect().left + 1 : null;
+  const near = x !== null && !app.drag && !app.link && !app.marquee && !event.target.closest?.('.bar, .sbar, .conn-h, .hit') && Math.abs(event.clientX - x) <= 4;
+  if (near) {
+    app.todayTip = true;
+    ui.tip.hidden = false;
+    ui.tip.textContent = t('chart.today', { date: formatDate(app.range.today) });
+    ui.tip.style.left = `${event.clientX + 14}px`;
+    ui.tip.style.top = `${event.clientY + 16}px`;
+  } else if (app.todayTip) {
+    app.todayTip = false;
+    ui.tip.hidden = true;
+  }
+}
 
 ui.bt.addEventListener('pointerup', endMarquee);
 ui.bt.addEventListener('pointercancel', endMarquee);
 ui.bt.addEventListener('pointerleave', () => {
   if (!app.link) ui.bt.querySelector('.conn')?.classList.remove('show');
+  if (app.todayTip) {
+    app.todayTip = false;
+    ui.tip.hidden = true;
+  }
 });
 
 function moveMarquee(marquee, event) {
@@ -2176,7 +2242,7 @@ function renderConnectors() {
   ui.bt.append(
     h(
       'div',
-      { class: `conn${app.link ? ' show' : ''}`, style: { left: `${el.offsetLeft}px`, top: `${el.offsetTop}px`, width: `${el.offsetWidth}px`, height: `${el.offsetHeight}px`, '--cx': `${el.offsetWidth / 2}px` } },
+      { class: `conn tc-${colorOf(row)}${app.link ? ' show' : ''}`, style: { left: `${el.offsetLeft}px`, top: `${el.offsetTop}px`, width: `${el.offsetWidth}px`, height: `${el.offsetHeight}px`, '--cx': `${el.offsetWidth / 2}px` } },
       ...sides.flatMap((side) => {
         const dir = LINK_DIRECTION[side];
         return [
@@ -2213,7 +2279,7 @@ function beginLink(event, row, side) {
   const dir = LINK_DIRECTION[side];
   const line = svgEl('line', { x1: x, y1: y, x2: x, y2: y });
   const dot = svgEl('circle', { cx: x, cy: y, r: 4 });
-  const svg = svgEl('svg', { class: `rubber dir-${dir}`, width: ui.bt.offsetWidth, height: ui.bt.offsetHeight, 'aria-hidden': 'true' });
+  const svg = svgEl('svg', { class: `rubber dir-${dir} tc-${colorOf(row)}`, width: ui.bt.offsetWidth, height: ui.bt.offsetHeight, 'aria-hidden': 'true' });
   svg.append(line, dot);
   ui.bt.append(svg);
   app.link = { id: row.id, dir, x0: event.clientX, y0: event.clientY, moved: false, sticky: false, target: null, svg, line, dot };
@@ -2399,6 +2465,9 @@ function renderPanel() {
     afterPanelToggle();
   }
   hideSuggest();
+  // The panel takes the color of the task it shows (the first of several), so that it reads as that task's.
+  const shown = row ?? (several ? rowById([...app.picked][0]) : null);
+  ui.panel.className = `panel${shown && !link ? ` tc-${colorOf(shown)}` : ''}`;
   if (!open) {
     app.panelKey = '';
     return;
@@ -2781,23 +2850,26 @@ function taskForm(row) {
     'aria-label': t('panel.name'),
     onchange: (event) => (event.target.value.trim() ? commit({ name: event.target.value }) : revert(t('panel.errName'))),
   });
-  // What is entered day to day (progress, effort, note) is always at hand; the rest opens with the button in the header.
-  const quick = h(
-    'div',
-    { class: 'quick form' },
-    h('div', { class: 'lbl' }, t('panel.progress'), h('div', { class: 'range' }, rangeInput, output)),
+  // What is entered day to day (progress, hours, note) is always at hand; the rest opens with the button in the header.
+  const hours = (key, label) =>
     labeled(
-      t('panel.effort'),
+      label,
       h('input', {
         type: 'number',
         min: '0',
         step: '0.5',
-        value: task.effort === null ? '' : String(task.effort),
+        value: task[key] === null ? '' : String(task[key]),
         disabled: parent,
-        'data-field': 'effort',
-        onchange: (event) => (event.target.value === '' ? commit({ effort: null }) : Number(event.target.value) >= 0 ? commit({ effort: Number(event.target.value) }) : revert(t('panel.errEffort'))),
+        'data-field': key,
+        onchange: (event) => (event.target.value === '' ? commit({ [key]: null }) : Number(event.target.value) >= 0 ? commit({ [key]: Number(event.target.value) }) : revert(t('panel.errEffort'))),
       }),
-    ),
+    );
+  const quick = h(
+    'div',
+    { class: 'quick form' },
+    h('div', { class: 'lbl' }, t('panel.progress'), h('div', { class: 'range' }, rangeInput, output)),
+    hours('estimate', t('panel.estimate')),
+    hours('actual', t('panel.actual')),
     labeled(t('panel.note'), h('textarea', { 'data-field': 'note', maxlength: '2000', onchange: (event) => commit({ note: event.target.value }) }, task.note), 'note'),
     parent ? h('p', { class: 'hint note-hint' }, t('panel.parentHint')) : null,
   );
@@ -2846,12 +2918,17 @@ function openProject() {
   const { project } = app.state.doc;
   const error = h('p', { class: 'err', role: 'alert', hidden: true });
   const name = h('input', { type: 'text', value: project.name, maxlength: '200', 'aria-label': t('project.name') });
+  const weekStart = h('select', { 'aria-label': t('project.weekStart'), 'data-field': 'weekStart' }, ...WEEK_STARTS.map((value) => h('option', { value }, t(value === 'sun' ? 'project.weekSun' : 'project.weekMon'))));
+  weekStart.value = project.weekStart;
   const holidays = h('textarea', { spellcheck: 'false', placeholder: '2026-11-23', 'aria-label': t('project.holidaysAria') }, project.holidays.join('\n'));
+  const workdays = h('textarea', { spellcheck: 'false', placeholder: '2026-11-21', 'aria-label': t('project.workdaysAria') }, project.workdays.join('\n'));
   // Shows what was saved (the server trims and sorts), or what is still saved when the edit was refused.
   const show = () => {
     const saved = app.state.doc.project;
     name.value = saved.name;
+    weekStart.value = saved.weekStart;
     holidays.value = saved.holidays.join('\n');
+    workdays.value = saved.workdays.join('\n');
   };
   const save = async (op) => {
     error.hidden = true;
@@ -2861,14 +2938,27 @@ function openProject() {
     });
     show();
   };
+  const dates = (field) => field.value.split(/[\s,]+/).filter(Boolean);
   name.addEventListener('change', () => save({ name: name.value }));
-  holidays.addEventListener('change', () => save({ holidays: holidays.value.split(/[\s,]+/).filter(Boolean) }));
+  weekStart.addEventListener('change', () => save({ weekStart: weekStart.value }));
+  holidays.addEventListener('change', () => save({ holidays: dates(holidays) }));
+  workdays.addEventListener('change', () => save({ workdays: dates(workdays) }));
   ui.project.replaceChildren(
     h('div', { class: 'dh' }, h('span', { id: 'project-title' }, t('project.title')), h('button', { class: 'btn flat square', type: 'button', 'aria-label': t('dlg.close'), onclick: () => ui.project.close() }, '×')),
     h(
       'div',
       { class: 'db' },
-      h('div', { class: 'form', style: { padding: '0' } }, labeled(t('project.name'), name), labeled(t('project.holidays'), holidays), error, h('p', { class: 'hint' }, t('project.hint')), h('div', { class: 'lbl' }, t('project.file'), h('span', { class: 'path' }, app.state.file.path))),
+      h(
+        'div',
+        { class: 'form', style: { padding: '0' } },
+        labeled(t('project.name'), name),
+        labeled(t('project.weekStart'), weekStart),
+        labeled(t('project.holidays'), holidays),
+        labeled(t('project.workdays'), workdays),
+        error,
+        h('p', { class: 'hint' }, t('project.hint')),
+        h('div', { class: 'lbl' }, t('project.file'), h('span', { class: 'path' }, app.state.file.path)),
+      ),
     ),
   );
   if (!ui.project.open) ui.project.showModal();

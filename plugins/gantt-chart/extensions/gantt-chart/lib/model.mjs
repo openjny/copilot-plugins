@@ -4,7 +4,7 @@
 import { t } from './i18n.mjs';
 
 export const FORMAT = 'openjny-gantt-chart';
-export const VERSION = 2;
+export const VERSION = 3;
 /** The color labels. A task that has none of its own ("inherit") takes the color of its parent, and blue at the top. */
 export const PALETTE = ['blue', 'green', 'orange', 'red', 'purple', 'pink', 'gray'];
 export const COLORS = ['inherit', ...PALETTE];
@@ -14,7 +14,8 @@ export const MAX_TASKS = 2000;
 export const MAX_DURATION = 3650;
 export const MAX_LAG = 999;
 export const ID_RE = /^[A-Za-z0-9_-]{1,32}$/;
-const TASK_FIELDS = ['name', 'start', 'duration', 'progress', 'effort', 'resources', 'color', 'note', 'collapsed', 'milestone', 'predecessors', 'due'];
+const TASK_FIELDS = ['name', 'start', 'duration', 'progress', 'estimate', 'actual', 'resources', 'color', 'note', 'collapsed', 'milestone', 'predecessors', 'due'];
+export const WEEK_STARTS = ['mon', 'sun'];
 
 /** An error with a code for programs and a message in the current language (key and params let a caller say it again). */
 export class ModelError extends Error {
@@ -56,6 +57,9 @@ export function parseDate(text) {
 /** 0 = Sunday. */
 export const dayOfWeek = (day) => (((day + 4) % 7) + 7) % 7;
 export const mondayOnOrBefore = (day) => day - ((dayOfWeek(day) + 6) % 7);
+export const isWeekend = (day) => dayOfWeek(day) === 0 || dayOfWeek(day) === 6;
+/** The first day of the week that holds `day`, for a week that starts on Monday ("mon") or Sunday ("sun"). */
+export const weekStartOnOrBefore = (day, weekStart = 'mon') => day - ((dayOfWeek(day) - (weekStart === 'sun' ? 0 : 1) + 7) % 7);
 
 export function todayDay(now = new Date()) {
   return Math.round(Date.UTC(now.getFullYear(), now.getMonth(), now.getDate()) / DAY_MS);
@@ -66,15 +70,13 @@ export function ymd(day) {
   return { y: date.getUTCFullYear(), m: date.getUTCMonth() + 1, d: date.getUTCDate() };
 }
 
-// ---- Working-day calendar: Saturday, Sunday and the project's holidays are off --------------------------
+// ---- Working-day calendar: Saturday, Sunday and the project's holidays are off, except the weekend days it works ----
 
 export function makeCalendar(project) {
   const holidays = new Set((project?.holidays ?? []).map(parseDate).filter((day) => day !== null));
+  const workdays = new Set((project?.workdays ?? []).map(parseDate).filter((day) => day !== null));
   const isHoliday = (day) => holidays.has(day);
-  const isWorkday = (day) => {
-    const weekday = dayOfWeek(day);
-    return weekday !== 0 && weekday !== 6 && !holidays.has(day);
-  };
+  const isWorkday = (day) => (isWeekend(day) ? workdays.has(day) : !holidays.has(day));
   const step = (day, direction) => {
     let current = day;
     for (let i = 0; i < 20000; i++) {
@@ -152,7 +154,13 @@ const FIELD = {
     if (typeof value !== 'number' || !Number.isFinite(value) || value < 0 || value > 100) bad(what, 'expect.progress');
     return Math.round(value);
   },
-  effort(value, what) {
+  estimate(value, what) {
+    return FIELD.hours(value, what);
+  },
+  actual(value, what) {
+    return FIELD.hours(value, what);
+  },
+  hours(value, what) {
     if (value === null) return null;
     if (typeof value !== 'number' || !Number.isFinite(value) || value < 0 || value > 1e6) bad(what, 'expect.effort');
     return round2(value);
@@ -199,6 +207,14 @@ const FIELD = {
     if (!Array.isArray(value) || value.length > 500 || value.some((item) => parseDate(item) === null)) bad(what, 'expect.holidays');
     return [...new Set(value)].sort();
   },
+  workdays(value, what) {
+    if (!Array.isArray(value) || value.length > 500 || value.some((item) => parseDate(item) === null || !isWeekend(parseDate(item)))) bad(what, 'expect.workdays');
+    return [...new Set(value)].sort();
+  },
+  weekStart(value, what) {
+    if (!WEEK_STARTS.includes(value)) bad(what, 'expect.weekStart');
+    return value;
+  },
 };
 
 export const blankTask = (id) => ({
@@ -208,7 +224,8 @@ export const blankTask = (id) => ({
   start: '1970-01-01',
   duration: 1,
   progress: 0,
-  effort: null,
+  estimate: null,
+  actual: null,
   resources: [],
   color: 'inherit',
   predecessors: [],
@@ -219,7 +236,7 @@ export const blankTask = (id) => ({
 });
 
 export function emptyDoc(name = '') {
-  return { format: FORMAT, version: VERSION, project: { name: name.slice(0, 200), holidays: [] }, tasks: [], versions: [] };
+  return { format: FORMAT, version: VERSION, project: { name: name.slice(0, 200), holidays: [], workdays: [], weekStart: 'mon' }, tasks: [], versions: [] };
 }
 
 /** Checks the outline (the first task is at level 0, a level rises by at most 1) and the predecessors of a flat task list. */
@@ -236,7 +253,7 @@ export function checkTasks(tasks, where, code) {
 
 /**
  * Makes the document consistent: checks the structure, drops predecessors from parent tasks, and
- * stores the computed dates, progress and effort back into the tasks. Throws on a dependency cycle.
+ * stores the computed dates, progress and hours back into the tasks. Throws on a dependency cycle.
  */
 export function finalize(doc, code = 'invalid_input') {
   checkTasks(doc.tasks, 'tasks', code);
@@ -253,7 +270,8 @@ export function finalize(doc, code = 'invalid_input') {
     if (row.summary) {
       task.duration = row.duration;
       task.progress = Math.round(row.progress);
-      task.effort = row.effort === null ? null : round2(row.effort);
+      task.estimate = row.estimate === null ? null : round2(row.estimate);
+      task.actual = row.actual === null ? null : round2(row.actual);
     }
   });
   return result;
@@ -284,16 +302,18 @@ export function schedule(doc, cal = makeCalendar(doc.project)) {
       let endDay = -Infinity;
       let work = 0;
       let done = 0;
-      let effort = null;
+      let estimate = null;
+      let actual = null;
       for (let child = i + 1; child < end; child = subtreeEnd(tasks, child)) {
         const sub = resolve(child);
         startDay = Math.min(startDay, sub.startDay);
         endDay = Math.max(endDay, sub.endDay);
         work += sub.work;
         done += sub.done;
-        if (sub.effort !== null) effort = (effort ?? 0) + sub.effort;
+        if (sub.estimate !== null) estimate = (estimate ?? 0) + sub.estimate;
+        if (sub.actual !== null) actual = (actual ?? 0) + sub.actual;
       }
-      row = { summary: true, milestone: false, startDay, endDay, duration: cal.count(startDay, endDay), progress: work ? done / work : 0, effort, work, done };
+      row = { summary: true, milestone: false, startDay, endDay, duration: cal.count(startDay, endDay), progress: work ? done / work : 0, estimate, actual, work, done };
     } else {
       let startDay = cal.next(parseDate(task.start));
       for (const pred of task.predecessors) {
@@ -309,7 +329,8 @@ export function schedule(doc, cal = makeCalendar(doc.project)) {
         endDay: cal.add(startDay, task.duration - 1),
         duration: task.duration,
         progress: task.progress,
-        effort: task.effort,
+        estimate: task.estimate,
+        actual: task.actual,
         work: task.duration,
         done: task.duration * task.progress,
       };
@@ -330,7 +351,7 @@ export function schedule(doc, cal = makeCalendar(doc.project)) {
     ancestors.push(i);
   }
 
-  const project = { count: tasks.length, startDay: null, endDay: null, duration: 0, progress: 0, effort: null };
+  const project = { count: tasks.length, startDay: null, endDay: null, duration: 0, progress: 0, estimate: null, actual: null };
   const top = rows.filter((row) => row.level === 0);
   if (top.length) {
     project.startDay = Math.min(...top.map((row) => row.startDay));
@@ -338,7 +359,10 @@ export function schedule(doc, cal = makeCalendar(doc.project)) {
     project.duration = cal.count(project.startDay, project.endDay);
     const work = top.reduce((sum, row) => sum + row.work, 0);
     project.progress = work ? top.reduce((sum, row) => sum + row.done, 0) / work : 0;
-    for (const row of top) if (row.effort !== null) project.effort = (project.effort ?? 0) + row.effort;
+    for (const row of top) {
+      if (row.estimate !== null) project.estimate = (project.estimate ?? 0) + row.estimate;
+      if (row.actual !== null) project.actual = (project.actual ?? 0) + row.actual;
+    }
   }
   return { rows, byId: new Map(rows.map((row) => [row.id, row])), project };
 }
@@ -502,10 +526,10 @@ function slideTasks(d, ids, days, cal) {
 function patchTask(d, i, patch, cal) {
   const task = d.tasks[i];
   if (patch.end !== undefined && patch.duration !== undefined) fail('invalid_input', 'err.endAndDuration');
-  const derived = ['start', 'end', 'duration', 'progress', 'effort', 'predecessors'].filter((key) => patch[key] !== undefined);
+  const derived = ['start', 'end', 'duration', 'progress', 'estimate', 'actual', 'predecessors'].filter((key) => patch[key] !== undefined);
   if (patch.milestone === true) derived.push('milestone');
   if (derived.length && isSummary(d.tasks, i)) fail('summary_field', 'err.summaryField', { name: task.name, fields: derived.join(', ') });
-  for (const key of ['name', 'resources', 'color', 'note', 'collapsed', 'milestone', 'progress', 'effort', 'due']) if (patch[key] !== undefined) task[key] = patch[key];
+  for (const key of ['name', 'resources', 'color', 'note', 'collapsed', 'milestone', 'progress', 'estimate', 'actual', 'due']) if (patch[key] !== undefined) task[key] = patch[key];
   // A milestone is a point in time: one working day.
   if (task.milestone && ((patch.duration !== undefined && patch.duration !== 1) || patch.end !== undefined)) fail('invalid_input', 'err.milestoneDuration', { name: task.name });
   if (patch.milestone === true) task.duration = 1;
@@ -700,12 +724,14 @@ function runOp(d, op, ctx) {
       return { op: 'shift', id: op.id };
     }
     case 'project': {
-      allowKeys(op, ['op', 'name', 'holidays']);
+      allowKeys(op, ['op', 'name', 'holidays', 'workdays', 'weekStart']);
       if (op.name !== undefined) {
         if (typeof op.name !== 'string' || op.name.length > 200) bad('name', 'expect.name200');
         d.project.name = op.name.trim();
       }
       if (op.holidays !== undefined) d.project.holidays = FIELD.holidays(op.holidays, 'holidays');
+      if (op.workdays !== undefined) d.project.workdays = FIELD.workdays(op.workdays, 'workdays');
+      if (op.weekStart !== undefined) d.project.weekStart = FIELD.weekStart(op.weekStart, 'weekStart');
       return { op: 'project' };
     }
     case 'save_version': {
@@ -805,11 +831,14 @@ export function describe(doc, { includeVersions = false } = {}) {
     project: {
       name: doc.project.name,
       holidays: doc.project.holidays,
+      workdays: doc.project.workdays,
+      weekStart: doc.project.weekStart,
       start: project.startDay === null ? null : formatDate(project.startDay),
       end: project.endDay === null ? null : formatDate(project.endDay),
       workingDays: project.duration,
       progress: round2(project.progress),
-      effort: project.effort,
+      estimate: project.estimate,
+      actual: project.actual,
       taskCount: project.count,
     },
     tasks: doc.tasks.map((task, i) => ({
@@ -823,7 +852,8 @@ export function describe(doc, { includeVersions = false } = {}) {
       end: formatDate(rows[i].endDay),
       duration: rows[i].duration,
       progress: Math.round(rows[i].progress),
-      effort: rows[i].effort,
+      estimate: rows[i].estimate,
+      actual: rows[i].actual,
       resources: task.resources,
       color: task.color,
       predecessors: task.predecessors,
